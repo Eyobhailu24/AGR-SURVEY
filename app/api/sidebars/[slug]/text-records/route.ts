@@ -1,10 +1,13 @@
 import { NextResponse } from 'next/server'
 import { requireRole } from '@/lib/auth-guard'
 import { getSidebarBySlug } from '@/lib/queries/sidebars'
-import { getTextRecord, upsertTextRecord } from '@/lib/queries/text-records'
+import { getTextRecord, listTextRecords, upsertTextRecord } from '@/lib/queries/text-records'
 import { recordAudit } from '@/lib/audit'
 import { sanitizeRichText } from '@/lib/sanitize-html'
 
+// With no `date`, returns every record for this sidebar (used by the
+// cards list). With `date`, returns just that one (a lighter lookup for
+// callers that only need a single day).
 export async function GET(request: Request, { params }: { params: Promise<{ slug: string }> }) {
   const ctx = await requireRole('reader')
   if (!ctx.ok) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
@@ -12,8 +15,14 @@ export async function GET(request: Request, { params }: { params: Promise<{ slug
   const sidebar = await getSidebarBySlug(slug)
   if (!sidebar) return NextResponse.json({ error: 'Not found' }, { status: 404 })
 
-  const date = new URL(request.url).searchParams.get('date')
-  if (!date) return NextResponse.json({ error: 'date is required' }, { status: 400 })
+  const searchParams = new URL(request.url).searchParams
+  const date = searchParams.get('date')
+  if (!date) {
+    const dir = searchParams.get('dir') === 'asc' ? 'asc' : 'desc'
+    const dateFrom = searchParams.get('dateFrom')
+    const dateTo = searchParams.get('dateTo')
+    return NextResponse.json(await listTextRecords(sidebar.id, dir, dateFrom, dateTo))
+  }
   const record = await getTextRecord(sidebar.id, date)
   return NextResponse.json(record ?? { id: null, record_date: date, body: '', updated_by: null })
 }

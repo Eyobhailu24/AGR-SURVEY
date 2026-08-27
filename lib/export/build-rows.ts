@@ -1,6 +1,7 @@
 import type { Sidebar } from '@/lib/queries/sidebars'
 import type { Finding } from '@/lib/queries/findings'
 import type { LookupRow } from '@/lib/queries/lookups'
+import type { TextRecord } from '@/lib/queries/text-records'
 
 export type ExportTable = { title: string; headers: string[]; rows: string[][] }
 
@@ -47,4 +48,15 @@ export function buildExportTable(
   ])
 
   return { title: sidebar.name, headers, rows }
+}
+
+// Word/Google Doc exports are for the free-form text records (one per date),
+// not the findings grid — CSV/Excel/Google Sheet cover that. Kept on the
+// same ExportTable shape so it reuses the existing docx/Google Doc writers.
+export function buildTextRecordsExportTable(sidebar: Sidebar, records: TextRecord[]): ExportTable {
+  return {
+    title: `${sidebar.name} — Text records`,
+    headers: ['Date', 'Notes'],
+    rows: records.map((r) => [r.record_date.slice(0, 10), stripHtml(r.body)]),
+  }
 }

@@ -23,6 +23,7 @@ export async function POST(request: Request) {
     name: body.name,
     description: body.description ?? null,
     includesTextRecord: Boolean(body.includesTextRecord),
+    notesOnly: Boolean(body.notesOnly),
     columnSchema,
     createdBy: ctx.email!,
   })

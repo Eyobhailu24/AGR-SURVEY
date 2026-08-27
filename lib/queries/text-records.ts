@@ -10,10 +10,27 @@ export async function getTextRecord(sidebarId: number, date: string) {
   return result.rows[0] ?? null
 }
 
-export async function listTextRecords(sidebarId: number) {
+export async function listTextRecords(
+  sidebarId: number,
+  dir: 'asc' | 'desc' = 'desc',
+  dateFrom?: string | null,
+  dateTo?: string | null,
+) {
+  const whereParts = ['sidebar_id = $1']
+  const params: unknown[] = [sidebarId]
+  if (dateFrom) {
+    params.push(dateFrom)
+    whereParts.push(`record_date >= $${params.length}`)
+  }
+  if (dateTo) {
+    params.push(dateTo)
+    whereParts.push(`record_date <= $${params.length}`)
+  }
   const result = await pool.query<TextRecord>(
-    'select id, record_date, body, updated_by from text_records where sidebar_id = $1 order by record_date desc',
-    [sidebarId],
+    `select id, record_date, body, updated_by from text_records
+     where ${whereParts.join(' and ')}
+     order by record_date ${dir === 'asc' ? 'asc' : 'desc'}`,
+    params,
   )
   return result.rows
 }
@@ -27,4 +44,14 @@ export async function upsertTextRecord(sidebarId: number, date: string, body: st
     [sidebarId, date, body, actor],
   )
   return result.rows[0]
+}
+
+export async function deleteTextRecord(sidebarId: number, date: string) {
+  const existing = await pool.query<TextRecord>(
+    'select id, record_date, body, updated_by from text_records where sidebar_id = $1 and record_date = $2',
+    [sidebarId, date],
+  )
+  if (existing.rows.length === 0) return null
+  await pool.query('delete from text_records where sidebar_id = $1 and record_date = $2', [sidebarId, date])
+  return existing.rows[0]
 }

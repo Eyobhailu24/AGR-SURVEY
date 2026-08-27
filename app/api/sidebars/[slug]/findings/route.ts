@@ -19,6 +19,8 @@ export async function GET(request: Request, { params }: { params: Promise<{ slug
   const cursor = decodeFindingsCursor(url.searchParams.get('cursor'))
   const sampleTypeId = url.searchParams.get('sampleTypeId')
   const measurementTypeId = url.searchParams.get('measurementTypeId')
+  const dateFrom = url.searchParams.get('dateFrom')
+  const dateTo = url.searchParams.get('dateTo')
 
   const page = await listFindings({
     sidebarId: sidebar.id,
@@ -28,6 +30,8 @@ export async function GET(request: Request, { params }: { params: Promise<{ slug
     dir,
     sampleTypeId: sampleTypeId ? Number(sampleTypeId) : null,
     measurementTypeId: measurementTypeId ? Number(measurementTypeId) : null,
+    dateFrom,
+    dateTo,
   })
   return NextResponse.json(page)
 }

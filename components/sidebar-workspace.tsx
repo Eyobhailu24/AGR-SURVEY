@@ -24,14 +24,31 @@ import {
   AlertDialogHeader,
   AlertDialogTitle,
 } from '@/components/ui/alert-dialog'
-import { RichTextEditor } from '@/components/rich-text-editor'
+import { TextRecordsPanel } from '@/components/text-records-panel'
 import { AddLookupDialog } from '@/components/add-lookup-dialog'
 import { ImportCsvDialog } from '@/components/import-csv-dialog'
 import { ImportImageDialog } from '@/components/import-image-dialog'
-import { ImportTextDialog } from '@/components/import-text-dialog'
+import { cn } from '@/lib/utils'
 import type { Sidebar } from '@/lib/queries/sidebars'
 import type { Finding, FindingsPage, FindingsSort } from '@/lib/queries/findings'
 import type { LookupRow } from '@/lib/queries/lookups'
+
+// Per-column floors so the table (wrapped in an overflow-x-auto container)
+// scrolls sideways once the columns need more room than the viewport has,
+// instead of every column being squeezed down to fit — inputs/selects will
+// happily shrink to near-nothing otherwise, which is what made the table
+// feel congested.
+const COLUMN_MIN_WIDTH: Record<string, string> = {
+  finding_date: 'min-w-36',
+  sample_id: 'min-w-24',
+  sample_type: 'min-w-36',
+  measurement_type: 'min-w-44',
+  measurement_group: 'min-w-32',
+  values: 'min-w-48',
+  apparatus: 'min-w-32',
+  notes: 'min-w-80',
+  actions: 'min-w-32',
+}
 
 function dateOnly(value: string) {
   return value.slice(0, 10)
@@ -40,23 +57,40 @@ function todayISO() {
   return new Date().toISOString().slice(0, 10)
 }
 
+// Notes used to be rich text (see git history); existing rows can still
+// carry HTML markup even though the column is now a plain input — strip it
+// on the way in so old entries display cleanly instead of showing raw tags.
+function stripHtml(html: string) {
+  return html
+    .replace(/<[^>]+>/g, ' ')
+    .replace(/&nbsp;/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim()
+}
+function normalizeFinding(finding: Finding): Finding {
+  return { ...finding, notes: stripHtml(finding.notes) }
+}
+
 function Editable({
   value,
   onChange,
   type = 'text',
   readOnly,
+  placeholder,
 }: {
   value: string
   onChange: (v: string) => void
   type?: string
   readOnly?: boolean
+  placeholder?: string
 }) {
-  if (readOnly) return <span className="block px-2 py-2 text-sm">{value || '—'}</span>
+  if (readOnly) return <span className="block px-2 py-2 text-sm">{value || placeholder || '—'}</span>
   return (
     <input
       type={type}
-      aria-label="Editable value"
-      className="w-full bg-transparent px-2 py-2 text-sm outline-none focus:bg-primary/5"
+      aria-label={placeholder ?? 'Editable value'}
+      placeholder={placeholder}
+      className="w-full bg-transparent px-2 py-2 text-sm outline-none placeholder:text-muted-foreground/60 focus:bg-primary/5"
       value={value}
       onChange={(e) => onChange(e.target.value)}
     />
@@ -80,7 +114,7 @@ export function SidebarWorkspace({
   canEdit: boolean
   pageSize: number
 }) {
-  const [findings, setFindings] = useState<Finding[]>(initialPage.rows)
+  const [findings, setFindings] = useState<Finding[]>(() => initialPage.rows.map(normalizeFinding))
   const [totalCount, setTotalCount] = useState(initialPage.totalCount)
   const [sampleTypes, setSampleTypes] = useState(initialSampleTypes)
   const [measurementTypes, setMeasurementTypes] = useState(initialMeasurementTypes)
@@ -91,19 +125,24 @@ export function SidebarWorkspace({
   const [sorting, setSorting] = useState<SortingState>([{ id: 'finding_date', desc: true }])
   const [sampleTypeFilter, setSampleTypeFilter] = useState<string>('')
   const [measurementTypeFilter, setMeasurementTypeFilter] = useState<string>('')
+  const [dateFromFilter, setDateFromFilter] = useState<string>('')
+  const [dateToFilter, setDateToFilter] = useState<string>('')
   // cursors[i] is the cursor that was used to fetch page i (undefined for page 0).
   const [cursors, setCursors] = useState<(string | undefined)[]>([undefined])
   const [pageIndex, setPageIndex] = useState(0)
   const [nextCursor, setNextCursor] = useState<string | null>(initialPage.nextCursor)
   const [loading, setLoading] = useState(false)
 
-  const [textDate, setTextDate] = useState(todayISO())
-  const [textBody, setTextBody] = useState('')
-  const [textLoading, setTextLoading] = useState(false)
-
   const apiBase = `/api/sidebars/${sidebar.slug}`
   const sort: FindingsSort = sorting[0]?.id === 'sample_id' ? 'sample_id' : 'finding_date'
   const dir: 'asc' | 'desc' = sorting[0]?.desc === false ? 'asc' : 'desc'
+
+  function setSortColumn(id: FindingsSort) {
+    setSorting([{ id, desc: sorting[0]?.desc ?? true }])
+  }
+  function toggleSortDirection() {
+    setSorting((prev) => [{ id: prev[0]?.id ?? 'finding_date', desc: !(prev[0]?.desc ?? true) }])
+  }
 
   async function fetchPage(cursor: string | undefined, targetPageIndex: number) {
     setLoading(true)
@@ -112,10 +151,12 @@ export function SidebarWorkspace({
       if (cursor) params.set('cursor', cursor)
       if (sampleTypeFilter) params.set('sampleTypeId', sampleTypeFilter)
       if (measurementTypeFilter) params.set('measurementTypeId', measurementTypeFilter)
+      if (dateFromFilter) params.set('dateFrom', dateFromFilter)
+      if (dateToFilter) params.set('dateTo', dateToFilter)
       const response = await fetch(`${apiBase}/findings?${params}`)
       if (!response.ok) throw new Error('Could not load findings')
       const page: FindingsPage = await response.json()
-      setFindings(page.rows)
+      setFindings(page.rows.map(normalizeFinding))
       setTotalCount(page.totalCount)
       setNextCursor(page.nextCursor)
       setPageIndex(targetPageIndex)
@@ -129,7 +170,7 @@ export function SidebarWorkspace({
   // Sidebar identity change (navigating to a different /s/[slug]) resets to
   // the server-provided first page rather than re-fetching immediately.
   useEffect(() => {
-    setFindings(initialPage.rows)
+    setFindings(initialPage.rows.map(normalizeFinding))
     setTotalCount(initialPage.totalCount)
     setNextCursor(initialPage.nextCursor)
     setCursors([undefined])
@@ -142,28 +183,7 @@ export function SidebarWorkspace({
     setCursors([undefined])
     fetchPage(undefined, 0)
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [sort, dir, sampleTypeFilter, measurementTypeFilter])
-
-  useEffect(() => {
-    if (!sidebar.includes_text_record) return
-    let cancelled = false
-    setTextLoading(true)
-    fetch(`${apiBase}/text-records?date=${textDate}`)
-      .then((r) => r.json())
-      .then((record) => {
-        if (!cancelled) setTextBody(record.body ?? '')
-      })
-      .catch(() => {
-        if (!cancelled) toast.error('Could not load the text record for this date')
-      })
-      .finally(() => {
-        if (!cancelled) setTextLoading(false)
-      })
-    return () => {
-      cancelled = true
-    }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [textDate, sidebar.slug, sidebar.includes_text_record])
+  }, [sort, dir, sampleTypeFilter, measurementTypeFilter, dateFromFilter, dateToFilter])
 
   function goNext() {
     if (!nextCursor) return
@@ -249,20 +269,6 @@ export function SidebarWorkspace({
     }
   }
 
-  async function saveTextRecord() {
-    try {
-      const response = await fetch(`${apiBase}/text-records`, {
-        method: 'POST',
-        headers: { 'content-type': 'application/json' },
-        body: JSON.stringify({ record_date: textDate, body: textBody }),
-      })
-      if (!response.ok) throw new Error('Save failed')
-      toast.success(`Text record for ${textDate} saved`)
-    } catch {
-      toast.error('Could not save the text record')
-    }
-  }
-
   const columns = [
     columnHelper.accessor('finding_date', { header: 'Date' }),
     columnHelper.accessor('sample_id', { header: 'Sample' }),
@@ -284,6 +290,7 @@ export function SidebarWorkspace({
     manualPagination: true,
     getCoreRowModel: getCoreRowModel(),
     getRowId: (row) => String(row.id),
+    enableSortingRemoval: false,
   })
 
   const rangeStart = totalCount === 0 ? 0 : pageIndex * pageSize + 1
@@ -300,13 +307,16 @@ export function SidebarWorkspace({
         </div>
         <div className="flex flex-wrap items-center gap-2">
           <ExportMenu
+            kind="findings"
             apiBase={apiBase}
             slug={sidebar.slug}
             sort={sort}
             dir={dir}
             sampleTypeId={sampleTypeFilter}
             measurementTypeId={measurementTypeFilter}
-            hasActiveFilter={Boolean(sampleTypeFilter || measurementTypeFilter)}
+            dateFrom={dateFromFilter}
+            dateTo={dateToFilter}
+            hasActiveFilter={Boolean(sampleTypeFilter || measurementTypeFilter || dateFromFilter || dateToFilter)}
           />
           {canEdit && (
             <>
@@ -322,6 +332,60 @@ export function SidebarWorkspace({
       </div>
 
       <div className="flex flex-wrap items-center gap-3">
+        <div className="flex items-center gap-2">
+          <span className="text-xs uppercase tracking-wide text-muted-foreground">Sort by</span>
+          <Select value={sort} onValueChange={(v: FindingsSort | null) => v && setSortColumn(v)}>
+            <SelectTrigger size="sm" className="w-28" aria-label="Sort by">
+              <SelectValue />
+            </SelectTrigger>
+            <SelectContent>
+              <SelectItem value="finding_date">Date</SelectItem>
+              <SelectItem value="sample_id">Sample</SelectItem>
+            </SelectContent>
+          </Select>
+          <Button
+            variant="outline"
+            size="sm"
+            onClick={toggleSortDirection}
+            aria-label={dir === 'asc' ? 'Sort ascending' : 'Sort descending'}
+          >
+            {dir === 'asc' ? <ArrowUp className="size-3.5" /> : <ArrowDown className="size-3.5" />}
+            {dir === 'asc' ? 'Asc' : 'Desc'}
+          </Button>
+        </div>
+        <div className="flex items-center gap-2">
+          <span className="text-xs uppercase tracking-wide text-muted-foreground">Date</span>
+          <input
+            type="date"
+            aria-label="From date"
+            className="rounded-lg border border-input bg-transparent px-2 py-1 text-sm"
+            value={dateFromFilter}
+            max={dateToFilter || undefined}
+            onChange={(e) => setDateFromFilter(e.target.value)}
+          />
+          <span className="text-xs text-muted-foreground">to</span>
+          <input
+            type="date"
+            aria-label="To date"
+            className="rounded-lg border border-input bg-transparent px-2 py-1 text-sm"
+            value={dateToFilter}
+            min={dateFromFilter || undefined}
+            onChange={(e) => setDateToFilter(e.target.value)}
+          />
+          {(dateFromFilter || dateToFilter) && (
+            <Button
+              variant="ghost"
+              size="icon-sm"
+              aria-label="Clear date filter"
+              onClick={() => {
+                setDateFromFilter('')
+                setDateToFilter('')
+              }}
+            >
+              ×
+            </Button>
+          )}
+        </div>
         <div className="flex items-center gap-2">
           <span className="text-xs uppercase tracking-wide text-muted-foreground">Sample type</span>
           <Select
@@ -363,12 +427,12 @@ export function SidebarWorkspace({
       </div>
 
       <div className="overflow-x-auto rounded-xl border border-border">
-        <table className="w-full min-w-250 text-sm">
+        <table className="w-full text-sm">
           <thead className="bg-muted/60 text-left text-xs uppercase tracking-wider text-muted-foreground">
             {table.getHeaderGroups().map((headerGroup) => (
               <tr key={headerGroup.id}>
                 {headerGroup.headers.map((header) => (
-                  <th key={header.id} className="p-3">
+                  <th key={header.id} className={cn('p-3', COLUMN_MIN_WIDTH[header.column.id])}>
                     {header.column.getCanSort() ? (
                       <button
                         type="button"
@@ -480,15 +544,14 @@ export function SidebarWorkspace({
                   </td>
                   <td className="p-1 min-w-40">
                     {sidebar.column_schema.map((column) => (
-                      <div key={column.key} className="flex items-center gap-1">
-                        <span className="w-14 shrink-0 font-mono text-xs text-muted-foreground">{column.label}</span>
-                        <Editable
-                          readOnly={!canEdit}
-                          type={column.type === 'number' ? 'number' : column.type === 'date' ? 'date' : 'text'}
-                          value={finding.values[column.key] ?? ''}
-                          onChange={(v) => updateValue(finding.id, column.key, v)}
-                        />
-                      </div>
+                      <Editable
+                        key={column.key}
+                        readOnly={!canEdit}
+                        type={column.type === 'number' ? 'number' : column.type === 'date' ? 'date' : 'text'}
+                        placeholder={column.label}
+                        value={finding.values[column.key] ?? ''}
+                        onChange={(v) => updateValue(finding.id, column.key, v)}
+                      />
                     ))}
                     {sidebar.column_schema.length === 0 && <span className="text-xs text-muted-foreground">—</span>}
                   </td>
@@ -499,11 +562,11 @@ export function SidebarWorkspace({
                       onChange={(v) => update(finding.id, { apparatus: v })}
                     />
                   </td>
-                  <td className="min-w-[16rem] p-1">
-                    <RichTextEditor
+                  <td className="p-1">
+                    <Editable
+                      readOnly={!canEdit}
                       value={finding.notes}
                       onChange={(v) => update(finding.id, { notes: v })}
-                      editable={canEdit}
                     />
                   </td>
                   {canEdit && (
@@ -558,36 +621,7 @@ export function SidebarWorkspace({
         </Pagination>
       </div>
 
-      {sidebar.includes_text_record && (
-        <div className="flex flex-col gap-3">
-          <div className="flex flex-wrap items-center justify-between gap-3">
-            <h3 className="font-serif text-xl font-semibold">Text record</h3>
-            <div className="flex items-center gap-2">
-              <input
-                type="date"
-                aria-label="Text record date"
-                className="rounded-md border border-border bg-background px-2 py-1 text-sm"
-                value={textDate}
-                onChange={(e) => setTextDate(e.target.value)}
-              />
-              {canEdit && <ImportTextDialog date={textDate} onImport={setTextBody} />}
-            </div>
-          </div>
-          {textLoading ? (
-            <p className="text-sm text-muted-foreground">Loading…</p>
-          ) : (
-            <>
-              <RichTextEditor value={textBody} onChange={setTextBody} editable={canEdit} />
-              {canEdit && (
-                <Button className="self-start" onClick={saveTextRecord}>
-                  <Save data-icon="inline-start" />
-                  Save text record
-                </Button>
-              )}
-            </>
-          )}
-        </div>
-      )}
+      {sidebar.includes_text_record && <TextRecordsPanel apiBase={apiBase} slug={sidebar.slug} canEdit={canEdit} />}
 
       <AlertDialog open={deleteTarget !== null} onOpenChange={(open) => !open && setDeleteTarget(null)}>
         <AlertDialogContent>

@@ -26,25 +26,41 @@ const FILE_EXTENSIONS: Record<ExportFormat, string> = {
   'google-doc': '',
 }
 
+// The server maps format -> data source the same way (see
+// app/api/sidebars/[slug]/export/route.ts): CSV/Excel/Google Sheet always
+// export the findings grid, Word/Google Doc always export the text records.
+// Each trigger only offers the formats that match what it's exporting.
+const FORMATS_BY_KIND: Record<'findings' | 'text-records', ExportFormat[]> = {
+  findings: ['csv', 'xlsx', 'google-sheet'],
+  'text-records': ['docx', 'google-doc'],
+}
+
 export function ExportMenu({
+  kind,
   apiBase,
   slug,
   sort,
   dir,
   sampleTypeId,
   measurementTypeId,
+  dateFrom,
+  dateTo,
   hasActiveFilter,
 }: {
+  kind: 'findings' | 'text-records'
   apiBase: string
   slug: string
-  sort: string
+  sort?: string
   dir: string
-  sampleTypeId: string
-  measurementTypeId: string
-  hasActiveFilter: boolean
+  sampleTypeId?: string
+  measurementTypeId?: string
+  dateFrom?: string
+  dateTo?: string
+  hasActiveFilter?: boolean
 }) {
+  const formats = FORMATS_BY_KIND[kind]
   const [open, setOpen] = useState(false)
-  const [format, setFormat] = useState<ExportFormat>('csv')
+  const [format, setFormat] = useState<ExportFormat>(formats[0])
   const [scope, setScope] = useState<'view' | 'all'>('view')
   const [exporting, setExporting] = useState(false)
 
@@ -59,8 +75,10 @@ export function ExportMenu({
           scope,
           sort,
           dir,
-          sampleTypeId: scope === 'view' ? sampleTypeId || undefined : undefined,
-          measurementTypeId: scope === 'view' ? measurementTypeId || undefined : undefined,
+          sampleTypeId: kind === 'findings' && scope === 'view' ? sampleTypeId || undefined : undefined,
+          measurementTypeId: kind === 'findings' && scope === 'view' ? measurementTypeId || undefined : undefined,
+          dateFrom: kind === 'text-records' || scope === 'view' ? dateFrom || undefined : undefined,
+          dateTo: kind === 'text-records' || scope === 'view' ? dateTo || undefined : undefined,
         }),
       })
       if (!response.ok) {
@@ -78,7 +96,8 @@ export function ExportMenu({
         const objectUrl = URL.createObjectURL(blob)
         const a = document.createElement('a')
         a.href = objectUrl
-        a.download = `${slug}.${FILE_EXTENSIONS[format]}`
+        const suffix = kind === 'text-records' ? '-text-records' : ''
+        a.download = `${slug}${suffix}.${FILE_EXTENSIONS[format]}`
         a.click()
         URL.revokeObjectURL(objectUrl)
         toast.success(`${FORMAT_LABELS[format]} downloaded`)
@@ -91,16 +110,22 @@ export function ExportMenu({
     }
   }
 
+  const title = kind === 'findings' ? 'Export findings' : 'Export text records'
+
   return (
     <Dialog open={open} onOpenChange={setOpen}>
       <DialogTrigger className={buttonVariants({ variant: 'outline' })}>
         <Download data-icon="inline-start" />
-        Export
+        {kind === 'findings' ? 'Export' : 'Export text'}
       </DialogTrigger>
       <DialogContent className="max-w-sm">
         <DialogHeader>
-          <DialogTitle>Export findings</DialogTitle>
-          <DialogDescription>Choose a format and how much data to include.</DialogDescription>
+          <DialogTitle>{title}</DialogTitle>
+          <DialogDescription>
+            {kind === 'findings'
+              ? 'Choose a format and how much data to include.'
+              : `Choose a format. Records are ordered by date, ${dir === 'asc' ? 'oldest first' : 'newest first'} — matching the list's current order.`}
+          </DialogDescription>
         </DialogHeader>
         <div className="flex flex-col gap-4">
           <div className="grid gap-1.5">
@@ -110,7 +135,7 @@ export function ExportMenu({
                 <SelectValue />
               </SelectTrigger>
               <SelectContent>
-                {(Object.keys(FORMAT_LABELS) as ExportFormat[]).map((f) => (
+                {formats.map((f) => (
                   <SelectItem key={f} value={f}>
                     {FORMAT_LABELS[f]}
                   </SelectItem>
@@ -118,18 +143,20 @@ export function ExportMenu({
               </SelectContent>
             </Select>
           </div>
-          <div className="grid gap-1.5">
-            <Label htmlFor="export-scope">Scope</Label>
-            <Select value={scope} onValueChange={(v: 'view' | 'all' | null) => v && setScope(v)}>
-              <SelectTrigger id="export-scope" className="w-full">
-                <SelectValue />
-              </SelectTrigger>
-              <SelectContent>
-                <SelectItem value="view">Current view{hasActiveFilter ? ' (matches your filters)' : ''}</SelectItem>
-                <SelectItem value="all">Entire table</SelectItem>
-              </SelectContent>
-            </Select>
-          </div>
+          {kind === 'findings' && (
+            <div className="grid gap-1.5">
+              <Label htmlFor="export-scope">Scope</Label>
+              <Select value={scope} onValueChange={(v: 'view' | 'all' | null) => v && setScope(v)}>
+                <SelectTrigger id="export-scope" className="w-full">
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="view">Current view{hasActiveFilter ? ' (matches your filters)' : ''}</SelectItem>
+                  <SelectItem value="all">Entire table</SelectItem>
+                </SelectContent>
+              </Select>
+            </div>
+          )}
         </div>
         <DialogFooter>
           <Button variant="outline" onClick={() => setOpen(false)}>

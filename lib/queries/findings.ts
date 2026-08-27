@@ -24,6 +24,8 @@ export type FindingsQuery = {
   dir?: 'asc' | 'desc'
   sampleTypeId?: number | null
   measurementTypeId?: number | null
+  dateFrom?: string | null
+  dateTo?: string | null
 }
 
 export type FindingsPage = { rows: Finding[]; nextCursor: string | null; totalCount: number }
@@ -72,6 +74,14 @@ export async function listFindings(query: FindingsQuery): Promise<FindingsPage> 
   if (query.measurementTypeId != null) {
     params.push(query.measurementTypeId)
     whereParts.push(`measurement_type_id = $${params.length}`)
+  }
+  if (query.dateFrom) {
+    params.push(query.dateFrom)
+    whereParts.push(`finding_date >= $${params.length}`)
+  }
+  if (query.dateTo) {
+    params.push(query.dateTo)
+    whereParts.push(`finding_date <= $${params.length}`)
   }
 
   const countResult = await pool.query<{ count: string }>(

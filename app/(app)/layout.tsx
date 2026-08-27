@@ -42,9 +42,9 @@ export default async function AppLayout({ children }: { children: React.ReactNod
           </div>
         </div>
       </header>
-      <div className="mx-auto grid max-w-[1500px] lg:grid-cols-[260px_1fr]">
+      <div className="mx-auto max-w-[1500px] lg:flex lg:items-start">
         <AppSidebar sidebars={sidebars} role={role} />
-        <main className="flex flex-col gap-5 p-5 lg:p-10">{children}</main>
+        <main className="flex flex-1 flex-col gap-5 p-5 lg:min-w-0 lg:p-10">{children}</main>
       </div>
       <Toaster />
     </div>

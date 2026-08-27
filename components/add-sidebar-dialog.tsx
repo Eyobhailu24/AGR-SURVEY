@@ -37,6 +37,7 @@ export function AddSidebarDialog({
   const [name, setName] = useState('')
   const [description, setDescription] = useState('')
   const [includesTextRecord, setIncludesTextRecord] = useState(true)
+  const [notesOnly, setNotesOnly] = useState(false)
   const [columns, setColumns] = useState<DraftColumn[]>([emptyColumn()])
   const [submitting, setSubmitting] = useState(false)
 
@@ -50,6 +51,7 @@ export function AddSidebarDialog({
     setName('')
     setDescription('')
     setIncludesTextRecord(true)
+    setNotesOnly(false)
     setColumns([emptyColumn()])
   }
 
@@ -67,7 +69,7 @@ export function AddSidebarDialog({
       const response = await fetch('/api/sidebars', {
         method: 'POST',
         headers: { 'content-type': 'application/json' },
-        body: JSON.stringify({ name, description, includesTextRecord, columnSchema }),
+        body: JSON.stringify({ name, description, includesTextRecord, notesOnly, columnSchema }),
       })
       if (!response.ok) {
         const body = await response.json().catch(() => ({}))
@@ -117,66 +119,81 @@ export function AddSidebarDialog({
           </div>
           <div className="flex items-center justify-between rounded-lg border border-border p-3">
             <div>
-              <p className="text-sm font-medium">Include a text record</p>
-              <p className="text-xs text-muted-foreground">A rich-text note per day, separate from per-row notes.</p>
+              <p className="text-sm font-medium">Text records only</p>
+              <p className="text-xs text-muted-foreground">
+                A dated notes page with no findings table — e.g. a general journal that isn&apos;t tied to a specific
+                test.
+              </p>
             </div>
-            <Switch checked={includesTextRecord} onCheckedChange={setIncludesTextRecord} />
+            <Switch checked={notesOnly} onCheckedChange={setNotesOnly} />
           </div>
 
-          <div className="flex flex-col gap-2">
-            <div className="flex items-center justify-between">
-              <Label>Measurement columns</Label>
-              <Button
-                type="button"
-                size="sm"
-                variant="outline"
-                onClick={() => setColumns((all) => [...all, emptyColumn()])}
-              >
-                <Plus data-icon="inline-start" />
-                Add column
-              </Button>
+          {!notesOnly && (
+            <div className="flex items-center justify-between rounded-lg border border-border p-3">
+              <div>
+                <p className="text-sm font-medium">Include a text record</p>
+                <p className="text-xs text-muted-foreground">A rich-text note per day, separate from per-row notes.</p>
+              </div>
+              <Switch checked={includesTextRecord} onCheckedChange={setIncludesTextRecord} />
             </div>
-            {columns.map((column) => (
-              <div key={column._id} className="flex items-center gap-2">
-                <Input
-                  aria-label="Column key"
-                  placeholder="key (e.g. NO3)"
-                  className="w-28"
-                  value={column.key}
-                  onChange={(e) => updateColumn(column._id, { key: e.target.value })}
-                />
-                <Input
-                  aria-label="Column label"
-                  placeholder="label"
-                  value={column.label}
-                  onChange={(e) => updateColumn(column._id, { label: e.target.value })}
-                />
-                <Select
-                  value={column.type}
-                  onValueChange={(value: ColumnField['type'] | null) => value && updateColumn(column._id, { type: value })}
-                >
-                  <SelectTrigger className="w-28" aria-label="Column type">
-                    <SelectValue />
-                  </SelectTrigger>
-                  <SelectContent>
-                    <SelectItem value="text">Text</SelectItem>
-                    <SelectItem value="number">Number</SelectItem>
-                    <SelectItem value="date">Date</SelectItem>
-                    <SelectItem value="select">Choice</SelectItem>
-                  </SelectContent>
-                </Select>
+          )}
+
+          {!notesOnly && (
+            <div className="flex flex-col gap-2">
+              <div className="flex items-center justify-between">
+                <Label>Measurement columns</Label>
                 <Button
                   type="button"
-                  size="icon-sm"
-                  variant="ghost"
-                  aria-label="Remove column"
-                  onClick={() => removeColumn(column._id)}
+                  size="sm"
+                  variant="outline"
+                  onClick={() => setColumns((all) => [...all, emptyColumn()])}
                 >
-                  <Trash2 />
+                  <Plus data-icon="inline-start" />
+                  Add column
                 </Button>
               </div>
-            ))}
-          </div>
+              {columns.map((column) => (
+                <div key={column._id} className="flex items-center gap-2">
+                  <Input
+                    aria-label="Column key"
+                    placeholder="key (e.g. NO3)"
+                    className="w-28"
+                    value={column.key}
+                    onChange={(e) => updateColumn(column._id, { key: e.target.value })}
+                  />
+                  <Input
+                    aria-label="Column label"
+                    placeholder="label"
+                    value={column.label}
+                    onChange={(e) => updateColumn(column._id, { label: e.target.value })}
+                  />
+                  <Select
+                    value={column.type}
+                    onValueChange={(value: ColumnField['type'] | null) => value && updateColumn(column._id, { type: value })}
+                  >
+                    <SelectTrigger className="w-28" aria-label="Column type">
+                      <SelectValue />
+                    </SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value="text">Text</SelectItem>
+                      <SelectItem value="number">Number</SelectItem>
+                      <SelectItem value="date">Date</SelectItem>
+                      <SelectItem value="select">Choice</SelectItem>
+                    </SelectContent>
+                  </Select>
+                  <Button
+                    type="button"
+                    size="icon-sm"
+                    variant="ghost"
+                    aria-label="Remove column"
+                    onClick={() => removeColumn(column._id)}
+                  >
+                    <Trash2 />
+                  </Button>
+                </div>
+              ))}
+            </div>
+          )}
         </div>
 
         <DialogFooter>

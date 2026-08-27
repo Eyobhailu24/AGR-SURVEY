@@ -16,13 +16,14 @@ export type Sidebar = {
   icon: string | null
   description: string | null
   includes_text_record: boolean
+  notes_only: boolean
   column_schema: ColumnField[]
   is_archived: boolean
   sort_order: number
 }
 
 const SIDEBAR_COLUMNS =
-  'id, name, slug, icon, description, includes_text_record, column_schema, is_archived, sort_order'
+  'id, name, slug, icon, description, includes_text_record, notes_only, column_schema, is_archived, sort_order'
 
 export async function listSidebars(includeArchived = false) {
   const result = await pool.query<Sidebar>(
@@ -52,6 +53,7 @@ export async function createSidebar(input: {
   name: string
   description?: string | null
   includesTextRecord: boolean
+  notesOnly?: boolean
   columnSchema: ColumnField[]
   createdBy: string
 }) {
@@ -64,16 +66,21 @@ export async function createSidebar(input: {
   }
   const maxOrder = await pool.query<{ max: number | null }>('select max(sort_order) as max from sidebars')
   const nextOrder = (maxOrder.rows[0]?.max ?? 0) + 1
+  // A notes-only sidebar has no findings grid, so its text-record section
+  // is the whole page — always on for it, regardless of what was passed.
+  const notesOnly = Boolean(input.notesOnly)
+  const includesTextRecord = notesOnly || input.includesTextRecord
   const result = await pool.query<Sidebar>(
-    `insert into sidebars (name, slug, description, includes_text_record, column_schema, sort_order, created_by)
-     values ($1,$2,$3,$4,$5,$6,$7)
+    `insert into sidebars (name, slug, description, includes_text_record, notes_only, column_schema, sort_order, created_by)
+     values ($1,$2,$3,$4,$5,$6,$7,$8)
      returning ${SIDEBAR_COLUMNS}`,
     [
       input.name,
       slug,
       input.description ?? null,
-      input.includesTextRecord,
-      JSON.stringify(input.columnSchema),
+      includesTextRecord,
+      notesOnly,
+      JSON.stringify(notesOnly ? [] : input.columnSchema),
       nextOrder,
       input.createdBy,
     ],

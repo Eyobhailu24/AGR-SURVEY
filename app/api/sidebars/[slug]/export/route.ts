@@ -3,7 +3,8 @@ import { requireRole } from '@/lib/auth-guard'
 import { getSidebarBySlug } from '@/lib/queries/sidebars'
 import { listFindings, type FindingsSort } from '@/lib/queries/findings'
 import { listMeasurementTypes, listSampleTypes } from '@/lib/queries/lookups'
-import { buildExportTable } from '@/lib/export/build-rows'
+import { listTextRecords } from '@/lib/queries/text-records'
+import { buildExportTable, buildTextRecordsExportTable, type ExportTable } from '@/lib/export/build-rows'
 import { toCsv, toDocxBuffer, toXlsxBuffer } from '@/lib/export/formats'
 import { createGoogleDoc, createGoogleSheet } from '@/lib/export/google'
 import { getGoogleAccessToken } from '@/lib/google-token'
@@ -25,22 +26,42 @@ export async function POST(request: Request, { params }: { params: Promise<{ slu
 
   const body = await request.json().catch(() => ({}))
   const format: string = body.format
+  // Word and Google Doc are for the free-form text records (one entry per
+  // date); CSV/Excel/Google Sheet are for the findings grid — see
+  // components/export-menu.tsx, which only offers the matching subset per
+  // trigger, but the server stays authoritative on the mapping.
+  const kind: 'findings' | 'text-records' = format === 'docx' || format === 'google-doc' ? 'text-records' : 'findings'
   const scope: 'view' | 'all' = body.scope === 'all' ? 'all' : 'view'
   const sort: FindingsSort = body.sort === 'sample_id' ? 'sample_id' : 'finding_date'
   const dir: 'asc' | 'desc' = body.dir === 'asc' ? 'asc' : 'desc'
   const sampleTypeId = scope === 'view' && body.sampleTypeId ? Number(body.sampleTypeId) : null
   const measurementTypeId = scope === 'view' && body.measurementTypeId ? Number(body.measurementTypeId) : null
+  const dateFrom = scope === 'view' && body.dateFrom ? String(body.dateFrom) : null
+  const dateTo = scope === 'view' && body.dateTo ? String(body.dateTo) : null
 
-  const page = await listFindings({
-    sidebarId: sidebar.id,
-    limit: ALL_ROWS_CAP,
-    sort,
-    dir,
-    sampleTypeId,
-    measurementTypeId,
-  })
-  const [sampleTypes, measurementTypes] = await Promise.all([listSampleTypes(), listMeasurementTypes()])
-  const table = buildExportTable(sidebar, page.rows, sampleTypes, measurementTypes)
+  let table: ExportTable
+  if (kind === 'text-records') {
+    if (!sidebar.includes_text_record) {
+      return NextResponse.json({ error: 'This sidebar has no text records to export' }, { status: 400 })
+    }
+    // Text records only ever have one meaningful order (by date) — reuse
+    // whichever direction the findings table is currently sorted in.
+    const records = await listTextRecords(sidebar.id, dir, dateFrom, dateTo)
+    table = buildTextRecordsExportTable(sidebar, records)
+  } else {
+    const page = await listFindings({
+      sidebarId: sidebar.id,
+      limit: ALL_ROWS_CAP,
+      sort,
+      dir,
+      sampleTypeId,
+      measurementTypeId,
+      dateFrom,
+      dateTo,
+    })
+    const [sampleTypes, measurementTypes] = await Promise.all([listSampleTypes(), listMeasurementTypes()])
+    table = buildExportTable(sidebar, page.rows, sampleTypes, measurementTypes)
+  }
 
   async function logExport(extra?: Record<string, unknown>) {
     await recordAudit({
@@ -49,7 +70,7 @@ export async function POST(request: Request, { params }: { params: Promise<{ slu
       action: 'export',
       entityType: 'sidebar',
       entityId: sidebar!.id,
-      diff: { format, scope, rowCount: table.rows.length, sidebar: sidebar!.slug, ...extra },
+      diff: { format, kind, scope, rowCount: table.rows.length, sidebar: sidebar!.slug, ...extra },
     })
   }
 

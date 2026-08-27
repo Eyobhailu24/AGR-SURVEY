@@ -6,7 +6,48 @@ import { Select as SelectPrimitive } from "@base-ui/react/select"
 import { cn } from "@/lib/utils"
 import { ChevronDownIcon, CheckIcon, ChevronUpIcon } from "lucide-react"
 
-const Select = SelectPrimitive.Root
+// Base UI's <Select.Value> only knows an option's label once that option's
+// <Select.Item> has actually mounted (i.e. the popup has been opened at
+// least once) — without an explicit `items` map on the root, the trigger
+// shows the raw value (e.g. "finding_date", a numeric id) instead of its
+// label on first render. We don't want every call site to hand-build that
+// map, so this wrapper derives it automatically by walking the <SelectItem>
+// children that were going to be rendered anyway.
+function collectSelectItems(
+  children: React.ReactNode,
+  acc: { value: string; label: React.ReactNode }[] = []
+) {
+  React.Children.forEach(children, (child) => {
+    if (!React.isValidElement(child)) return
+    if (child.type === SelectItem) {
+      const props = child.props as SelectPrimitive.Item.Props
+      if (props.value !== undefined && props.value !== null) {
+        acc.push({ value: String(props.value), label: props.children })
+      }
+      return
+    }
+    const nested = (child.props as { children?: React.ReactNode } | undefined)?.children
+    if (nested) collectSelectItems(nested, acc)
+  })
+  return acc
+}
+
+function Select<Value = string, Multiple extends boolean | undefined = false>({
+  children,
+  items,
+  ...props
+}: SelectPrimitive.Root.Props<Value, Multiple>) {
+  const derivedItems = React.useMemo(
+    () => items ?? (collectSelectItems(children) as unknown as SelectPrimitive.Root.Props<Value, Multiple>["items"]),
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [children, items]
+  )
+  return (
+    <SelectPrimitive.Root items={derivedItems} {...props}>
+      {children}
+    </SelectPrimitive.Root>
+  )
+}
 
 function SelectGroup({ className, ...props }: SelectPrimitive.Group.Props) {
   return (
