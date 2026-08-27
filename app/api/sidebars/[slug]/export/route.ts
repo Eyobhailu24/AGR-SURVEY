@@ -1,0 +1,103 @@
+import { NextResponse } from 'next/server'
+import { requireRole } from '@/lib/auth-guard'
+import { getSidebarBySlug } from '@/lib/queries/sidebars'
+import { listFindings, type FindingsSort } from '@/lib/queries/findings'
+import { listMeasurementTypes, listSampleTypes } from '@/lib/queries/lookups'
+import { buildExportTable } from '@/lib/export/build-rows'
+import { toCsv, toDocxBuffer, toXlsxBuffer } from '@/lib/export/formats'
+import { createGoogleDoc, createGoogleSheet } from '@/lib/export/google'
+import { getGoogleAccessToken } from '@/lib/google-token'
+import { recordAudit } from '@/lib/audit'
+
+// Findings tables are paginated at 15/page for browsing, but export always
+// needs "everything matching the current view" (scope: 'view') or
+// "everything, ignoring filters" (scope: 'all') — so this re-runs the same
+// listFindings query the table uses, just unbounded (capped generously
+// rather than truly unbounded, so one export request can't run away).
+const ALL_ROWS_CAP = 20000
+
+export async function POST(request: Request, { params }: { params: Promise<{ slug: string }> }) {
+  const ctx = await requireRole('reader')
+  if (!ctx.ok) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
+  const { slug } = await params
+  const sidebar = await getSidebarBySlug(slug)
+  if (!sidebar) return NextResponse.json({ error: 'Not found' }, { status: 404 })
+
+  const body = await request.json().catch(() => ({}))
+  const format: string = body.format
+  const scope: 'view' | 'all' = body.scope === 'all' ? 'all' : 'view'
+  const sort: FindingsSort = body.sort === 'sample_id' ? 'sample_id' : 'finding_date'
+  const dir: 'asc' | 'desc' = body.dir === 'asc' ? 'asc' : 'desc'
+  const sampleTypeId = scope === 'view' && body.sampleTypeId ? Number(body.sampleTypeId) : null
+  const measurementTypeId = scope === 'view' && body.measurementTypeId ? Number(body.measurementTypeId) : null
+
+  const page = await listFindings({
+    sidebarId: sidebar.id,
+    limit: ALL_ROWS_CAP,
+    sort,
+    dir,
+    sampleTypeId,
+    measurementTypeId,
+  })
+  const [sampleTypes, measurementTypes] = await Promise.all([listSampleTypes(), listMeasurementTypes()])
+  const table = buildExportTable(sidebar, page.rows, sampleTypes, measurementTypes)
+
+  async function logExport(extra?: Record<string, unknown>) {
+    await recordAudit({
+      actorEmail: ctx.email,
+      actorName: ctx.name,
+      action: 'export',
+      entityType: 'sidebar',
+      entityId: sidebar!.id,
+      diff: { format, scope, rowCount: table.rows.length, sidebar: sidebar!.slug, ...extra },
+    })
+  }
+
+  try {
+    switch (format) {
+      case 'csv': {
+        await logExport()
+        return new NextResponse(toCsv(table), {
+          headers: {
+            'content-type': 'text/csv; charset=utf-8',
+            'content-disposition': `attachment; filename="${sidebar.slug}.csv"`,
+          },
+        })
+      }
+      case 'xlsx': {
+        const buffer = await toXlsxBuffer(table)
+        await logExport()
+        return new NextResponse(buffer, {
+          headers: {
+            'content-type': 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+            'content-disposition': `attachment; filename="${sidebar.slug}.xlsx"`,
+          },
+        })
+      }
+      case 'docx': {
+        const buffer = await toDocxBuffer(table)
+        await logExport()
+        return new NextResponse(buffer, {
+          headers: {
+            'content-type': 'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+            'content-disposition': `attachment; filename="${sidebar.slug}.docx"`,
+          },
+        })
+      }
+      case 'google-sheet':
+      case 'google-doc': {
+        const accessToken = await getGoogleAccessToken(ctx.email!)
+        const url =
+          format === 'google-sheet' ? await createGoogleSheet(accessToken, table) : await createGoogleDoc(accessToken, table)
+        await logExport({ url })
+        return NextResponse.json({ url })
+      }
+      default:
+        return NextResponse.json({ error: 'Unknown export format' }, { status: 400 })
+    }
+  } catch (error) {
+    console.error('[export]', error)
+    const message = error instanceof Error ? error.message : 'Export failed'
+    return NextResponse.json({ error: message }, { status: 500 })
+  }
+}
