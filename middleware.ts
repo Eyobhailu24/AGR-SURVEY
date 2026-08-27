@@ -10,11 +10,11 @@ const { auth } = NextAuth(authConfig)
 export default auth
 
 // Everything requires sign-in except the auth API itself, the login/pending
-// pages, and static/icon assets. The `authorized` callback in auth.config.ts
-// is what actually decides pass/redirect; this just decides which paths it
-// runs on.
+// pages, the public terms/privacy pages, and static/icon assets. The
+// `authorized` callback in auth.config.ts is what actually decides
+// pass/redirect; this just decides which paths it runs on.
 export const config = {
   matcher: [
-    '/((?!api/auth|login|pending-approval|_next/static|_next/image|favicon\\.ico|icon\\.svg|icon-light-32x32\\.png|icon-dark-32x32\\.png|apple-icon\\.png|placeholder.*).*)',
+    '/((?!api/auth|login|pending-approval|terms|privacy|_next/static|_next/image|favicon\\.ico|icon\\.svg|icon-light-32x32\\.png|icon-dark-32x32\\.png|apple-icon\\.png|placeholder.*).*)',
   ],
 }

@@ -1,4 +1,5 @@
 import { redirect } from 'next/navigation'
+import Link from 'next/link'
 import { auth, signIn } from '@/auth'
 import { Button } from '@/components/ui/button'
 import { ThemeToggle } from '@/components/theme-toggle'
@@ -31,6 +32,15 @@ export default async function LoginPage() {
             Continue with Google
           </Button>
         </form>
+        <p className="text-xs text-muted-foreground">
+          <Link href="/terms" className="hover:text-foreground hover:underline">
+            Terms of Service
+          </Link>
+          {' · '}
+          <Link href="/privacy" className="hover:text-foreground hover:underline">
+            Privacy Policy
+          </Link>
+        </p>
       </div>
     </main>
   )

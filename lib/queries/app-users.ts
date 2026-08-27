@@ -51,3 +51,25 @@ export async function setAppUserRole(email: string, role: AppRole, approvedBy: s
   )
   return result.rows[0] ?? null
 }
+
+// Pre-provisions someone before their first sign-in: when they do sign in
+// via Google, Auth.js's createUser event calls getOrCreateAppUser, whose
+// `on conflict (email) do nothing` leaves this row (and the role already
+// set here) untouched rather than resetting them to 'pending'.
+export async function createAppUser(email: string, role: AppRole, displayName: string | null, approvedBy: string) {
+  const result = await pool.query<AppUser>(
+    `insert into app_users (email, display_name, role, approved_by, approved_at)
+     values ($1, $2, $3, $4, now())
+     returning *`,
+    [email.toLowerCase().trim(), displayName, role, approvedBy],
+  )
+  return result.rows[0]
+}
+
+export async function deleteAppUser(email: string) {
+  const normalized = email.toLowerCase().trim()
+  const existing = await getAppUserByEmail(normalized)
+  if (!existing) return null
+  await pool.query('delete from app_users where email = $1', [normalized])
+  return existing
+}

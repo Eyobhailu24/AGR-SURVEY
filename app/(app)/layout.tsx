@@ -1,4 +1,5 @@
 import { redirect } from 'next/navigation'
+import Link from 'next/link'
 import { signOut } from '@/auth'
 import { getSessionWithRole } from '@/lib/auth-guard'
 import { listSidebars } from '@/lib/queries/sidebars'
@@ -46,6 +47,17 @@ export default async function AppLayout({ children }: { children: React.ReactNod
         <AppSidebar sidebars={sidebars} role={role} />
         <main className="flex flex-1 flex-col gap-5 p-5 lg:min-w-0 lg:p-10">{children}</main>
       </div>
+      <footer className="border-t border-border py-4">
+        <div className="mx-auto flex max-w-[1500px] justify-center px-5 text-xs text-muted-foreground lg:px-10">
+          <Link href="/terms" className="hover:text-foreground hover:underline">
+            Terms of Service
+          </Link>
+          <span className="mx-2">·</span>
+          <Link href="/privacy" className="hover:text-foreground hover:underline">
+            Privacy Policy
+          </Link>
+        </div>
+      </footer>
       <Toaster />
     </div>
   )
