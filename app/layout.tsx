@@ -7,6 +7,14 @@ export const metadata: Metadata = {
   title: 'Sudan Grass Research Dashboard',
   description: 'Editable greenhouse, nitrate, and potassium research records with Google Docs and Sheets export.',
   generator: 'v0.app',
+  // Google Search Console site-ownership verification for
+  // https://agr-survey.vercel.app/, needed for OAuth consent screen
+  // branding verification. Renders as <meta name="google-site-verification"
+  // content="..."> in every page's <head> — must stay in place even after
+  // verification succeeds, or Search Console will consider it unverified again.
+  verification: {
+    google: 'hMhnGkJfOoI8BnrfEL2VxXW-EibNF87T5CYBvBoAT4M',
+  },
   icons: {
     icon: [
       {

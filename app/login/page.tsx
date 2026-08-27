@@ -15,10 +15,16 @@ export default async function LoginPage() {
       </div>
       <div className="flex w-full max-w-sm flex-col items-center gap-6 rounded-xl border border-border bg-card p-8 text-center shadow-sm">
         <div>
-          <p className="font-mono text-[10px] uppercase tracking-[0.24em] text-muted-foreground">Field notebook</p>
-          <h1 className="mt-1 font-serif text-2xl font-semibold">Sign in to continue</h1>
+          <p className="font-mono text-[10px] uppercase tracking-[0.24em] text-muted-foreground">
+            Sudan Grass Research Dashboard
+          </p>
+          <h1 className="mt-1 font-serif text-2xl font-semibold">Greenhouse &amp; lab research, organized</h1>
           <p className="mt-2 text-sm text-muted-foreground">
-            Access is limited to approved team members. New accounts wait for admin approval after signing in.
+            A private research tool for tracking Sudan grass greenhouse and lab test data — record findings,
+            measurements, and dated notes across active tests, then report and export to Google Sheets and Docs.
+          </p>
+          <p className="mt-3 text-sm text-muted-foreground">
+            Sign in with an approved Google account to continue. New accounts wait for admin approval.
           </p>
         </div>
         <form
