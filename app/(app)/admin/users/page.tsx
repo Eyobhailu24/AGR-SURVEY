@@ -5,7 +5,7 @@ import { UsersTable } from '@/components/users-table'
 
 export default async function AdminUsersPage() {
   const { role } = await getSessionWithRole()
-  if (role !== 'super_admin') redirect('/')
+  if (role !== 'super_admin') redirect('/dashboard')
 
   const users = await listAppUsers()
   return (

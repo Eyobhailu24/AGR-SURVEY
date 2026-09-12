@@ -7,7 +7,7 @@ import { ThemeToggle } from '@/components/theme-toggle'
 export default async function PendingApprovalPage() {
   const { email, role } = await getSessionWithRole()
   if (!email) redirect('/login')
-  if (role !== 'pending' && role !== 'revoked') redirect('/')
+  if (role !== 'pending' && role !== 'revoked') redirect('/dashboard')
 
   return (
     <main className="relative flex min-h-screen items-center justify-center bg-background p-6 text-foreground">

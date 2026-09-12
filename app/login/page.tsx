@@ -6,7 +6,7 @@ import { ThemeToggle } from '@/components/theme-toggle'
 
 export default async function LoginPage() {
   const session = await auth()
-  if (session?.user?.email) redirect('/')
+  if (session?.user?.email) redirect('/dashboard')
 
   return (
     <main className="relative flex min-h-screen items-center justify-center bg-background p-6 text-foreground">
@@ -31,7 +31,7 @@ export default async function LoginPage() {
           className="w-full"
           action={async () => {
             'use server'
-            await signIn('google', { redirectTo: '/' })
+            await signIn('google', { redirectTo: '/dashboard' })
           }}
         >
           <Button type="submit" className="w-full">

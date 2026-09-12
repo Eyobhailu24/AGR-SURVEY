@@ -7,7 +7,7 @@ import { LogsTable } from '@/components/logs-table'
 
 export default async function LogsPage() {
   const { role } = await getSessionWithRole()
-  if (role !== 'super_admin') redirect('/')
+  if (role !== 'super_admin') redirect('/dashboard')
 
   // Reference data for turning a log row's diff into plain English (e.g.
   // resolving a sample_type_id to its label) — includeArchived so entries

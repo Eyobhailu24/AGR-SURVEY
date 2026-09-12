@@ -10,11 +10,17 @@ const { auth } = NextAuth(authConfig)
 export default auth
 
 // Everything requires sign-in except the auth API itself, the login/pending
-// pages, the public terms/privacy pages, and static/icon assets. The
-// `authorized` callback in auth.config.ts is what actually decides
+// pages, the public marketing/terms/privacy pages, and static/icon assets.
+// The `authorized` callback in auth.config.ts is what actually decides
 // pass/redirect; this just decides which paths it runs on.
+//
+// The trailing `.+` (not `.*`) is what makes the landing page at "/" public:
+// for that path the captured remainder is empty, which `.*` would match and
+// `.+` does not, so middleware never runs on it. Listing "/" in the negative
+// lookahead instead would not work, for the same reason. Every other route
+// still has at least one character after the slash and stays gated.
 export const config = {
   matcher: [
-    '/((?!api/auth|login|pending-approval|terms|privacy|_next/static|_next/image|favicon\\.ico|icon\\.svg|icon-light-32x32\\.png|icon-dark-32x32\\.png|apple-icon\\.png|placeholder.*).*)',
+    '/((?!api/auth|login|pending-approval|terms|privacy|_next/static|_next/image|favicon\\.ico|icon\\.svg|icon-light-32x32\\.png|icon-dark-32x32\\.png|apple-icon\\.png|placeholder.*).+)',
   ],
 }
