@@ -2,6 +2,7 @@ import { NextResponse } from 'next/server'
 import { generateObject } from 'ai'
 import { z } from 'zod'
 import { requireRole } from '@/lib/auth-guard'
+import { VISION_MODEL, isAiConfigured, xkiro } from '@/lib/ai/provider'
 import { getSidebarBySlug } from '@/lib/queries/sidebars'
 
 // Produces candidate rows in the exact same shape lib/import/build-schema.ts
@@ -20,6 +21,11 @@ export async function POST(request: Request, { params }: { params: Promise<{ slu
   const imageBase64: string | undefined = body.imageBase64
   const mediaType: string = body.mediaType || 'image/jpeg'
   if (!imageBase64) return NextResponse.json({ error: 'imageBase64 is required' }, { status: 400 })
+
+  if (!isAiConfigured()) {
+    console.error('[import/image] XKIRO_API_KEY is not set')
+    return NextResponse.json({ error: 'Image extraction is not configured. Contact an administrator.' }, { status: 503 })
+  }
 
   const columnDescriptions =
     sidebar.column_schema.map((c) => `"${c.key}" (${c.label}, ${c.type})`).join(', ') || 'none defined for this sidebar'
@@ -43,7 +49,7 @@ export async function POST(request: Request, { params }: { params: Promise<{ slu
 
   try {
     const { object } = await generateObject({
-      model: 'anthropic/claude-opus-5',
+      model: xkiro(VISION_MODEL),
       schema: z.object({ rows: z.array(rowSchema) }),
       messages: [
         {

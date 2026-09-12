@@ -3,7 +3,7 @@
 import { useEffect, useState } from 'react'
 import Link from 'next/link'
 import { usePathname } from 'next/navigation'
-import { BarChart3, ChevronLeft, ChevronRight, Plus, ScrollText, Users } from 'lucide-react'
+import { BarChart3, Bot, ChevronLeft, ChevronRight, Plus, ScrollText, Users } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip'
 import { AddSidebarDialog } from '@/components/add-sidebar-dialog'
@@ -99,6 +99,9 @@ export function AppSidebar({ sidebars, role }: { sidebars: Sidebar[]; role: AppR
         <nav className="flex gap-2 overflow-auto lg:mb-4 lg:flex-col lg:overflow-visible lg:border-b lg:border-border lg:pb-4">
           <NavLink href="/reports" active={pathname === '/reports'} collapsed={collapsed} icon={<BarChart3 className="size-4 shrink-0" />}>
             Reports
+          </NavLink>
+          <NavLink href="/assistant" active={pathname === '/assistant'} collapsed={collapsed} icon={<Bot className="size-4 shrink-0" />}>
+            Assistant
           </NavLink>
         </nav>
         <nav className="flex gap-2 overflow-auto lg:flex-col lg:overflow-visible">
