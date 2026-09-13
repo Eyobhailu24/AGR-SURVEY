@@ -2,6 +2,7 @@ import type { Sidebar } from '@/lib/queries/sidebars'
 import type { Finding } from '@/lib/queries/findings'
 import type { LookupRow } from '@/lib/queries/lookups'
 import type { TextRecord } from '@/lib/queries/text-records'
+import { resolveView, type ViewColumn } from '@/lib/sidebar-view'
 
 export type ExportTable = { title: string; headers: string[]; rows: string[][] }
 
@@ -25,29 +26,34 @@ export function buildExportTable(
   const sampleTypeLabel = (id: number | null) => sampleTypes.find((s) => s.id === id)?.label ?? ''
   const measurementTypeLabel = (id: number | null) => measurementTypes.find((m) => m.id === id)?.label ?? ''
 
-  const headers = [
-    'Date',
-    'Sample',
-    'Sample type',
-    'Measurement type',
-    'Group',
-    ...sidebar.column_schema.map((c) => c.label),
-    'Apparatus',
-    'Notes',
-  ]
+  // Same columns, same order as the sidebar's table.
+  const { columns } = resolveView(sidebar)
 
-  const rows = findings.map((f) => [
-    f.finding_date.slice(0, 10),
-    f.sample_id,
-    sampleTypeLabel(f.sample_type_id),
-    measurementTypeLabel(f.measurement_type_id),
-    f.measurement_group,
-    ...sidebar.column_schema.map((c) => f.values[c.key] ?? ''),
-    f.apparatus,
-    stripHtml(f.notes),
-  ])
+  function cell(f: Finding, column: ViewColumn): string {
+    switch (column.builtin) {
+      case 'finding_date':
+        return f.finding_date.slice(0, 10)
+      case 'sample_id':
+        return f.sample_id
+      case 'sample_type':
+        return sampleTypeLabel(f.sample_type_id)
+      case 'measurement_type':
+        return measurementTypeLabel(f.measurement_type_id)
+      case 'measurement_group':
+        return f.measurement_group
+      case 'apparatus':
+        return f.apparatus
+      case 'notes':
+        return stripHtml(f.notes)
+    }
+    return f.values[column.field!.key] ?? ''
+  }
 
-  return { title: sidebar.name, headers, rows }
+  return {
+    title: sidebar.name,
+    headers: columns.map((c) => c.label),
+    rows: findings.map((f) => columns.map((c) => cell(f, c))),
+  }
 }
 
 // Word/Google Doc exports are for the free-form text records (one per date),

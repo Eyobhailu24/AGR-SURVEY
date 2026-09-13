@@ -21,13 +21,16 @@ export default async function SidebarPage({ params }: { params: Promise<{ slug: 
   }
 
   const [page, sampleTypes, measurementTypes] = await Promise.all([
-    listFindings({ sidebarId: sidebar.id, limit: PAGE_SIZE, sort: 'finding_date', dir: 'desc' }),
+    // No sort given: starts on the sidebar's own default sort.
+    listFindings({ sidebar, limit: PAGE_SIZE }),
     listSampleTypes(),
     listMeasurementTypes(),
   ])
 
   return (
     <SidebarWorkspace
+      // Fresh sort/filter/paging state per sidebar when navigating between them.
+      key={sidebar.id}
       sidebar={sidebar}
       initialPage={page}
       sampleTypes={sampleTypes}

@@ -1,7 +1,8 @@
 import { NextResponse } from 'next/server'
 import { requireRole } from '@/lib/auth-guard'
 import { getSidebarBySlug } from '@/lib/queries/sidebars'
-import { listFindings, type FindingsSort } from '@/lib/queries/findings'
+import { listFindings } from '@/lib/queries/findings'
+import { resolveView, sanitizeFilters } from '@/lib/sidebar-view'
 import { listMeasurementTypes, listSampleTypes } from '@/lib/queries/lookups'
 import { listTextRecords } from '@/lib/queries/text-records'
 import { buildExportTable, buildTextRecordsExportTable, type ExportTable } from '@/lib/export/build-rows'
@@ -32,12 +33,13 @@ export async function POST(request: Request, { params }: { params: Promise<{ slu
   // trigger, but the server stays authoritative on the mapping.
   const kind: 'findings' | 'text-records' = format === 'docx' || format === 'google-doc' ? 'text-records' : 'findings'
   const scope: 'view' | 'all' = body.scope === 'all' ? 'all' : 'view'
-  const sort: FindingsSort = body.sort === 'sample_id' ? 'sample_id' : 'finding_date'
+  const sort = typeof body.sort === 'string' ? body.sort : null
   const dir: 'asc' | 'desc' = body.dir === 'asc' ? 'asc' : 'desc'
-  const sampleTypeId = scope === 'view' && body.sampleTypeId ? Number(body.sampleTypeId) : null
-  const measurementTypeId = scope === 'view' && body.measurementTypeId ? Number(body.measurementTypeId) : null
-  const dateFrom = scope === 'view' && body.dateFrom ? String(body.dateFrom) : null
-  const dateTo = scope === 'view' && body.dateTo ? String(body.dateTo) : null
+  // Findings filters follow the sidebar's own filterable columns; the date
+  // range below is only the text-records list's filter.
+  const filters = scope === 'view' ? sanitizeFilters(body.filters, resolveView(sidebar)) : []
+  const dateFrom = body.dateFrom ? String(body.dateFrom) : null
+  const dateTo = body.dateTo ? String(body.dateTo) : null
 
   let table: ExportTable
   if (kind === 'text-records') {
@@ -49,16 +51,7 @@ export async function POST(request: Request, { params }: { params: Promise<{ slu
     const records = await listTextRecords(sidebar.id, dir, dateFrom, dateTo)
     table = buildTextRecordsExportTable(sidebar, records)
   } else {
-    const page = await listFindings({
-      sidebarId: sidebar.id,
-      limit: ALL_ROWS_CAP,
-      sort,
-      dir,
-      sampleTypeId,
-      measurementTypeId,
-      dateFrom,
-      dateTo,
-    })
+    const page = await listFindings({ sidebar, limit: ALL_ROWS_CAP, sort, dir, filters })
     const [sampleTypes, measurementTypes] = await Promise.all([listSampleTypes(), listMeasurementTypes()])
     table = buildExportTable(sidebar, page.rows, sampleTypes, measurementTypes)
   }

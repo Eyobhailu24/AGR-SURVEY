@@ -18,20 +18,25 @@ import { Label } from '@/components/ui/label'
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table'
 import type { Sidebar } from '@/lib/queries/sidebars'
+import { resolveView, type BuiltinId } from '@/lib/sidebar-view'
 
 type TargetField = { key: string; label: string }
 
+const BUILTIN_TARGETS: Record<BuiltinId, TargetField> = {
+  finding_date: { key: 'finding_date', label: 'Date (required, YYYY-MM-DD)' },
+  sample_id: { key: 'sample_id', label: 'Sample' },
+  sample_type: { key: 'sample_type_label', label: 'Sample type' },
+  measurement_type: { key: 'measurement_type_label', label: 'Measurement type' },
+  measurement_group: { key: 'measurement_group', label: 'Group' },
+  apparatus: { key: 'apparatus', label: 'Apparatus' },
+  notes: { key: 'notes', label: 'Notes' },
+}
+
+// The sidebar's own visible columns, in table order.
 function targetFields(sidebar: Sidebar): TargetField[] {
-  return [
-    { key: 'finding_date', label: 'Date (required, YYYY-MM-DD)' },
-    { key: 'sample_id', label: 'Sample' },
-    { key: 'sample_type_label', label: 'Sample type' },
-    { key: 'measurement_type_label', label: 'Measurement type' },
-    { key: 'measurement_group', label: 'Group' },
-    ...sidebar.column_schema.map((c) => ({ key: `values.${c.key}`, label: c.label })),
-    { key: 'apparatus', label: 'Apparatus' },
-    { key: 'notes', label: 'Notes' },
-  ]
+  return resolveView(sidebar).columns.map((c) =>
+    c.builtin ? BUILTIN_TARGETS[c.builtin] : { key: `values.${c.field!.key}`, label: c.label },
+  )
 }
 
 function setPath(obj: Record<string, unknown>, path: string, value: string) {
@@ -88,7 +93,7 @@ export function ImportCsvDialog({
         const auto: Record<string, string> = {}
         for (const field of fields) {
           const targetName = normalize(field.key.replace('values.', ''))
-          const guess = cols.find((h) => normalize(h) === targetName)
+          const guess = cols.find((h) => normalize(h) === targetName || normalize(h) === normalize(field.label))
           if (guess) auto[field.key] = guess
         }
         setMapping(auto)

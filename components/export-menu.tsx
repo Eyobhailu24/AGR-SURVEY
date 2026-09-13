@@ -7,6 +7,7 @@ import { Button, buttonVariants } from '@/components/ui/button'
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle, DialogTrigger } from '@/components/ui/dialog'
 import { Label } from '@/components/ui/label'
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
+import type { FindingsFilter } from '@/lib/sidebar-view'
 
 type ExportFormat = 'csv' | 'xlsx' | 'docx' | 'google-sheet' | 'google-doc'
 
@@ -41,8 +42,7 @@ export function ExportMenu({
   slug,
   sort,
   dir,
-  sampleTypeId,
-  measurementTypeId,
+  filters,
   dateFrom,
   dateTo,
   hasActiveFilter,
@@ -52,8 +52,9 @@ export function ExportMenu({
   slug: string
   sort?: string
   dir: string
-  sampleTypeId?: string
-  measurementTypeId?: string
+  /** Findings only: the table's active column filters. */
+  filters?: FindingsFilter[]
+  /** Text records only: the list's date range. */
   dateFrom?: string
   dateTo?: string
   hasActiveFilter?: boolean
@@ -75,10 +76,9 @@ export function ExportMenu({
           scope,
           sort,
           dir,
-          sampleTypeId: kind === 'findings' && scope === 'view' ? sampleTypeId || undefined : undefined,
-          measurementTypeId: kind === 'findings' && scope === 'view' ? measurementTypeId || undefined : undefined,
-          dateFrom: kind === 'text-records' || scope === 'view' ? dateFrom || undefined : undefined,
-          dateTo: kind === 'text-records' || scope === 'view' ? dateTo || undefined : undefined,
+          filters: kind === 'findings' && scope === 'view' ? filters : undefined,
+          dateFrom: kind === 'text-records' ? dateFrom || undefined : undefined,
+          dateTo: kind === 'text-records' ? dateTo || undefined : undefined,
         }),
       })
       if (!response.ok) {

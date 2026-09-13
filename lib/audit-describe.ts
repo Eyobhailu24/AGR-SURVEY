@@ -16,6 +16,7 @@ const ACTION_LABELS: Record<string, string> = {
   'measurement_type.create': 'Added a measurement type',
   'sidebar.create': 'Created a sidebar',
   'sidebar.archive': 'Archived a sidebar',
+  'sidebar.update': 'Edited a sidebar',
   export: 'Exported data',
   'finding.create': 'Added a finding',
   'finding.update': 'Edited a finding',
@@ -112,6 +113,15 @@ export function describeAuditEntry(
     case 'sidebar.archive': {
       const name = asString(before?.name) ?? 'Sidebar'
       return { action, entity: name, details: 'Removed from the tab list' }
+    }
+    case 'sidebar.update': {
+      const name = asString(after?.name) ?? asString(before?.name) ?? 'Sidebar'
+      const columnCount = Array.isArray(after?.column_schema) ? after.column_schema.length : 0
+      return {
+        action,
+        entity: name,
+        details: after?.notes_only ? 'Notes-only tab' : `Columns, sorting or filters · ${columnCount} custom column${columnCount === 1 ? '' : 's'}`,
+      }
     }
     case 'export': {
       const kind = diff.kind === 'text-records' ? 'text records' : 'findings'

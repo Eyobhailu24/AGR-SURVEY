@@ -14,8 +14,8 @@ export default async function ManageSidebarsPage() {
         <p className="font-mono text-xs uppercase tracking-widest text-muted-foreground">Workspace</p>
         <h2 className="mt-1 font-serif text-3xl font-semibold">Manage sidebars</h2>
         <p className="mt-1 text-sm text-muted-foreground">
-          Add new sidebars or remove ones you no longer need. Removing a sidebar hides it from everyone&apos;s
-          navigation.
+          Add, edit or delete sidebars. Edit a sidebar to change its columns and which of them its table can be
+          sorted and filtered by.
         </p>
       </div>
       <SidebarsManager sidebars={sidebars} />

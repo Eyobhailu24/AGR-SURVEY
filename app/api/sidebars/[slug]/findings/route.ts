@@ -1,7 +1,8 @@
 import { NextResponse } from 'next/server'
 import { requireRole } from '@/lib/auth-guard'
 import { getSidebarBySlug } from '@/lib/queries/sidebars'
-import { createFinding, decodeFindingsCursor, listFindings, type FindingsSort } from '@/lib/queries/findings'
+import { createFinding, decodeFindingsCursor, listFindings } from '@/lib/queries/findings'
+import { resolveView, sanitizeFilters } from '@/lib/sidebar-view'
 import { recordAudit } from '@/lib/audit'
 import { sanitizeRichText } from '@/lib/sanitize-html'
 
@@ -14,24 +15,24 @@ export async function GET(request: Request, { params }: { params: Promise<{ slug
 
   const url = new URL(request.url)
   const limit = Math.min(Math.max(Number(url.searchParams.get('limit')) || 15, 1), 100)
-  const sort: FindingsSort = url.searchParams.get('sort') === 'sample_id' ? 'sample_id' : 'finding_date'
-  const dir = url.searchParams.get('dir') === 'asc' ? 'asc' : 'desc'
+  const dirParam = url.searchParams.get('dir')
   const cursor = decodeFindingsCursor(url.searchParams.get('cursor'))
-  const sampleTypeId = url.searchParams.get('sampleTypeId')
-  const measurementTypeId = url.searchParams.get('measurementTypeId')
-  const dateFrom = url.searchParams.get('dateFrom')
-  const dateTo = url.searchParams.get('dateTo')
+  // `filters` is a JSON array of { column, value?, from?, to? } — see
+  // sanitizeFilters for what survives.
+  let rawFilters: unknown = []
+  try {
+    rawFilters = JSON.parse(url.searchParams.get('filters') ?? '[]')
+  } catch {
+    // Malformed filters are ignored rather than failing the whole page.
+  }
 
   const page = await listFindings({
-    sidebarId: sidebar.id,
+    sidebar,
     limit,
     cursor,
-    sort,
-    dir,
-    sampleTypeId: sampleTypeId ? Number(sampleTypeId) : null,
-    measurementTypeId: measurementTypeId ? Number(measurementTypeId) : null,
-    dateFrom,
-    dateTo,
+    sort: url.searchParams.get('sort'),
+    dir: dirParam === 'asc' || dirParam === 'desc' ? dirParam : null,
+    filters: sanitizeFilters(rawFilters, resolveView(sidebar)),
   })
   return NextResponse.json(page)
 }

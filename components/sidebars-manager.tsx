@@ -4,7 +4,7 @@ import { useState } from 'react'
 import Link from 'next/link'
 import { useRouter } from 'next/navigation'
 import { toast } from 'sonner'
-import { Plus, Trash2 } from 'lucide-react'
+import { Pencil, Plus, Trash2 } from 'lucide-react'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import {
@@ -18,13 +18,39 @@ import {
   AlertDialogTitle,
 } from '@/components/ui/alert-dialog'
 import { AddSidebarDialog } from '@/components/add-sidebar-dialog'
+import { SidebarConfigForm, sidebarToDraft, type SidebarFormPayload } from '@/components/sidebar-config-form'
+import { cn } from '@/lib/utils'
 import type { Sidebar } from '@/lib/queries/sidebars'
 
 export function SidebarsManager({ sidebars }: { sidebars: Sidebar[] }) {
   const router = useRouter()
   const [addOpen, setAddOpen] = useState(false)
+  const [editingId, setEditingId] = useState<number | null>(null)
+  const [saving, setSaving] = useState(false)
   const [deleteTarget, setDeleteTarget] = useState<Sidebar | null>(null)
   const [deleting, setDeleting] = useState(false)
+
+  async function saveEdit(sidebar: Sidebar, payload: SidebarFormPayload) {
+    setSaving(true)
+    try {
+      const response = await fetch(`/api/sidebars/${sidebar.slug}`, {
+        method: 'PATCH',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify(payload),
+      })
+      if (!response.ok) {
+        const body = await response.json().catch(() => ({}))
+        throw new Error(body.error || 'Could not save sidebar')
+      }
+      toast.success(`"${payload.name}" updated`)
+      setEditingId(null)
+      router.refresh()
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : 'Could not save sidebar')
+    } finally {
+      setSaving(false)
+    }
+  }
 
   async function confirmDelete() {
     if (!deleteTarget) return
@@ -36,6 +62,7 @@ export function SidebarsManager({ sidebars }: { sidebars: Sidebar[] }) {
         throw new Error(body.error || 'Could not delete sidebar')
       }
       toast.success(`"${deleteTarget.name}" deleted`)
+      if (editingId === deleteTarget.id) setEditingId(null)
       // Re-runs the (app) layout's listSidebars(), so both this list and the
       // navigation drop the sidebar without a full reload.
       router.refresh()
@@ -57,37 +84,66 @@ export function SidebarsManager({ sidebars }: { sidebars: Sidebar[] }) {
       </div>
 
       <ul className="divide-y divide-border rounded-xl border border-border">
-        {sidebars.map((sidebar) => (
-          <li key={sidebar.id} className="flex items-center gap-3 p-4">
-            <span className="flex size-9 shrink-0 items-center justify-center rounded-md border border-border text-sm font-semibold uppercase">
-              {sidebar.name.charAt(0)}
-            </span>
-            <div className="min-w-0 flex-1">
-              <div className="flex flex-wrap items-center gap-2">
-                <Link href={`/s/${sidebar.slug}`} className="truncate font-medium hover:underline">
-                  {sidebar.name}
-                </Link>
-                <Badge variant={sidebar.notes_only ? 'secondary' : 'outline'}>
-                  {sidebar.notes_only
-                    ? 'Text records only'
-                    : `${sidebar.column_schema.length} column${sidebar.column_schema.length === 1 ? '' : 's'}`}
-                </Badge>
+        {sidebars.map((sidebar) => {
+          const editing = editingId === sidebar.id
+          return (
+            <li key={sidebar.id}>
+              <div className="flex items-center gap-3 p-4">
+                <span className="flex size-9 shrink-0 items-center justify-center rounded-md border border-border text-sm font-semibold uppercase">
+                  {sidebar.name.charAt(0)}
+                </span>
+                <div className="min-w-0 flex-1">
+                  <div className="flex flex-wrap items-center gap-2">
+                    <Link href={`/s/${sidebar.slug}`} className="truncate font-medium hover:underline">
+                      {sidebar.name}
+                    </Link>
+                    <Badge variant={sidebar.notes_only ? 'secondary' : 'outline'}>
+                      {sidebar.notes_only
+                        ? 'Text records only'
+                        : `${sidebar.column_schema.length} column${sidebar.column_schema.length === 1 ? '' : 's'}`}
+                    </Badge>
+                  </div>
+                  {sidebar.description && (
+                    <p className="mt-0.5 line-clamp-2 text-sm text-muted-foreground">{sidebar.description}</p>
+                  )}
+                </div>
+                <Button
+                  size="sm"
+                  variant={editing ? 'secondary' : 'outline'}
+                  aria-expanded={editing}
+                  aria-controls={`edit-sidebar-${sidebar.id}`}
+                  onClick={() => setEditingId(editing ? null : sidebar.id)}
+                >
+                  <Pencil data-icon="inline-start" />
+                  {editing ? 'Close' : 'Edit'}
+                </Button>
+                <Button
+                  size="icon-sm"
+                  variant="ghost"
+                  aria-label={`Delete ${sidebar.name}`}
+                  className="text-muted-foreground hover:text-destructive"
+                  onClick={() => setDeleteTarget(sidebar)}
+                >
+                  <Trash2 />
+                </Button>
               </div>
-              {sidebar.description && (
-                <p className="mt-0.5 line-clamp-2 text-sm text-muted-foreground">{sidebar.description}</p>
+              {editing && (
+                <div
+                  id={`edit-sidebar-${sidebar.id}`}
+                  className={cn('border-t border-border bg-muted/30 p-4')}
+                >
+                  <SidebarConfigForm
+                    mode="edit"
+                    initial={sidebarToDraft(sidebar)}
+                    submitting={saving}
+                    onSubmit={(payload) => saveEdit(sidebar, payload)}
+                    onCancel={() => setEditingId(null)}
+                  />
+                </div>
               )}
-            </div>
-            <Button
-              size="icon-sm"
-              variant="ghost"
-              aria-label={`Delete ${sidebar.name}`}
-              className="text-muted-foreground hover:text-destructive"
-              onClick={() => setDeleteTarget(sidebar)}
-            >
-              <Trash2 />
-            </Button>
-          </li>
-        ))}
+            </li>
+          )
+        })}
         {sidebars.length === 0 && (
           <li className="p-6 text-center text-sm text-muted-foreground">No sidebars yet.</li>
         )}

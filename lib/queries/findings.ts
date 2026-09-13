@@ -1,4 +1,13 @@
 import { pool } from '@/lib/db'
+import type { Sidebar } from '@/lib/queries/sidebars'
+import {
+  ISO_DATE_RE,
+  NUMBER_RE,
+  resolveView,
+  type FindingsFilter,
+  type SortDir,
+  type ViewColumn,
+} from '@/lib/sidebar-view'
 
 export type Finding = {
   id: number
@@ -14,103 +23,198 @@ export type Finding = {
   updated_by: string | null
 }
 
+/** The cross-sidebar Reports page still sorts on these two fixed fields (see lib/queries/reports.ts). */
 export type FindingsSort = 'finding_date' | 'sample_id'
 
+export type FindingsCursor = { value: string; blank: number; id: number }
+
 export type FindingsQuery = {
-  sidebarId: number
+  sidebar: Pick<Sidebar, 'id' | 'column_schema' | 'view_config'>
   limit: number
-  cursor?: { value: string; id: number } | null
-  sort?: FindingsSort
-  dir?: 'asc' | 'desc'
-  sampleTypeId?: number | null
-  measurementTypeId?: number | null
-  dateFrom?: string | null
-  dateTo?: string | null
+  cursor?: FindingsCursor | null
+  /** A column id from the sidebar's view; anything not sortable falls back to the view's default sort. */
+  sort?: string | null
+  dir?: SortDir | null
+  filters?: FindingsFilter[]
 }
 
 export type FindingsPage = { rows: Finding[]; nextCursor: string | null; totalCount: number }
 
 const FINDING_COLUMNS =
   'id, finding_date, sample_id, sample_type_id, measurement_type_id, measurement_group, values, apparatus, notes, created_by, updated_by'
+const FINDING_COLUMNS_F = FINDING_COLUMNS.split(', ')
+  .map((column) => `f.${column}`)
+  .join(', ')
 
-export function encodeFindingsCursor(row: Finding, sort: FindingsSort): string {
-  const value = sort === 'sample_id' ? row.sample_id : row.finding_date
-  return Buffer.from(JSON.stringify({ v: value, id: row.id })).toString('base64url')
+// Route handlers clamp their own page size; this only stops one export
+// request from running away.
+const MAX_LIMIT = 20000
+
+export function encodeFindingsCursor(cursor: FindingsCursor): string {
+  return Buffer.from(JSON.stringify({ v: cursor.value, b: cursor.blank, id: cursor.id })).toString('base64url')
 }
 
-export function decodeFindingsCursor(raw: string | null): { value: string; id: number } | null {
+export function decodeFindingsCursor(raw: string | null): FindingsCursor | null {
   if (!raw) return null
   try {
     const parsed = JSON.parse(Buffer.from(raw, 'base64url').toString('utf8'))
-    if (typeof parsed.v !== 'string' && typeof parsed.v !== 'number') return null
-    return { value: String(parsed.v), id: Number(parsed.id) }
+    if (typeof parsed.v !== 'string' || !Number.isInteger(parsed.id)) return null
+    return { value: parsed.v, blank: parsed.b === 1 ? 1 : 0, id: parsed.id }
   } catch {
     return null
   }
 }
 
-// Keyset (not offset) pagination on purpose — stays index-backed no matter
-// how deep you page, and doesn't skip/duplicate rows under concurrent
-// inserts the way OFFSET does. Sorting is intentionally limited to
-// finding_date and sample_id: both are indexed and not-null; sample_type_id
-// / measurement_type_id are filters here rather than sortable columns,
-// since they're nullable FKs and a null-safe keyset comparator for them
-// isn't worth the complexity this data size doesn't need yet.
+type Push = (value: unknown) => string
+
+// Same "several replicates in one cell" convention as lib/queries/measurements.ts:
+// a number cell like "150, 170, 190" sorts and filters by its first reading,
+// and anything non-numeric counts as blank rather than failing the cast.
+function firstNumber(raw: string) {
+  const first = `trim(split_part(${raw}, ',', 1))`
+  return `(case when ${first} ~ '^-?[0-9]+([.][0-9]+)?$' then ${first}::numeric end)`
+}
+
+function customRaw(column: ViewColumn, push: Push) {
+  return `coalesce(f.values ->> ${push(column.field!.key)}, '')`
+}
+
+function lookupLabel(builtin: 'sample_type' | 'measurement_type') {
+  return builtin === 'sample_type'
+    ? `coalesce((select st.label from sample_types st where st.id = f.sample_type_id), '')`
+    : `coalesce((select mt.label from measurement_types mt where mt.id = f.measurement_type_id), '')`
+}
+
+/**
+ * `value` is what rows are ordered by; `blank` (0/1) sorts empty cells after
+ * filled ones in both directions. Both are non-null so the keyset
+ * comparison below stays exact.
+ */
+function sortExpression(column: ViewColumn, push: Push): { value: string; blank: string; cast: 'date' | 'numeric' | 'text' } {
+  switch (column.builtin) {
+    case 'finding_date':
+      // Cast, not a bare `0`: ORDER BY reads a bare integer literal as a column position.
+      return { value: 'f.finding_date', blank: '0::int', cast: 'date' }
+    case 'sample_type':
+    case 'measurement_type': {
+      const label = lookupLabel(column.builtin)
+      return { value: label, blank: `(${label} = '')::int`, cast: 'text' }
+    }
+    case 'sample_id':
+    case 'measurement_group':
+    case 'apparatus':
+    case 'notes':
+      return { value: `f.${column.builtin}`, blank: `(f.${column.builtin} = '')::int`, cast: 'text' }
+  }
+  const raw = customRaw(column, push)
+  if (column.kind === 'number') {
+    const num = firstNumber(raw)
+    return { value: `coalesce(${num}, 0)`, blank: `(${num} is null)::int`, cast: 'numeric' }
+  }
+  return { value: `trim(${raw})`, blank: `(trim(${raw}) = '')::int`, cast: 'text' }
+}
+
+function likePattern(value: string) {
+  return `%${value.replace(/[\\%_]/g, (m) => `\\${m}`)}%`
+}
+
+function filterClauses(column: ViewColumn, filter: FindingsFilter, push: Push): string[] {
+  const parts: string[] = []
+  switch (column.builtin) {
+    case 'finding_date':
+      if (filter.from) parts.push(`f.finding_date >= ${push(filter.from)}::date`)
+      if (filter.to) parts.push(`f.finding_date <= ${push(filter.to)}::date`)
+      return parts
+    case 'sample_type':
+      return filter.value ? [`f.sample_type_id = ${push(Number(filter.value))}`] : []
+    case 'measurement_type':
+      return filter.value ? [`f.measurement_type_id = ${push(Number(filter.value))}`] : []
+    case 'sample_id':
+    case 'measurement_group':
+    case 'apparatus':
+    case 'notes':
+      return filter.value ? [`f.${column.builtin} ilike ${push(likePattern(filter.value))}`] : []
+  }
+
+  const raw = customRaw(column, push)
+  if (column.kind === 'number') {
+    const num = firstNumber(raw)
+    if (filter.from) parts.push(`${num} >= ${push(filter.from)}::numeric`)
+    if (filter.to) parts.push(`${num} <= ${push(filter.to)}::numeric`)
+  } else if (column.kind === 'date') {
+    // Date cells are stored as YYYY-MM-DD text, which compares correctly as text.
+    if (filter.from) parts.push(`nullif(trim(${raw}), '') >= ${push(filter.from)}`)
+    if (filter.to) parts.push(`nullif(trim(${raw}), '') <= ${push(filter.to)}`)
+  } else if (column.kind === 'select') {
+    if (filter.value) parts.push(`trim(${raw}) = ${push(filter.value)}`)
+  } else if (filter.value) {
+    parts.push(`${raw} ilike ${push(likePattern(filter.value))}`)
+  }
+  return parts
+}
+
+function cursorMatches(cursor: FindingsCursor, cast: 'date' | 'numeric' | 'text') {
+  if (cast === 'date') return ISO_DATE_RE.test(cursor.value)
+  if (cast === 'numeric') return NUMBER_RE.test(cursor.value)
+  return true
+}
+
+// Keyset (not offset) pagination on purpose — doesn't skip/duplicate rows
+// under concurrent inserts the way OFFSET does, and the default date sort
+// stays index-backed. Sort and filter columns come only from the sidebar's
+// resolved view (never from raw input), and every value — including jsonb
+// keys — is passed as a bind parameter.
 export async function listFindings(query: FindingsQuery): Promise<FindingsPage> {
-  const sidebarId = query.sidebarId
-  const limit = Math.min(Math.max(query.limit, 1), 100)
-  const sort: FindingsSort = query.sort === 'sample_id' ? 'sample_id' : 'finding_date'
-  const dir = query.dir === 'asc' ? 'asc' : 'desc'
-  const sortColumn = sort === 'sample_id' ? 'sample_id' : 'finding_date'
-  const compareOp = dir === 'asc' ? '>' : '<'
+  const view = resolveView(query.sidebar)
+  const limit = Math.min(Math.max(query.limit, 1), MAX_LIMIT)
+  const requested = view.columns.find((c) => c.id === query.sort && c.sortable)
+  const sortColumn = requested ?? view.columns.find((c) => c.id === view.defaultSort.column)!
+  const dir: SortDir = requested && query.dir ? query.dir : view.defaultSort.dir
 
-  const whereParts = ['sidebar_id = $1']
-  const params: unknown[] = [sidebarId]
+  const params: unknown[] = [query.sidebar.id]
+  const push: Push = (value) => {
+    params.push(value)
+    return `$${params.length}`
+  }
+  const whereParts = ['f.sidebar_id = $1']
 
-  if (query.sampleTypeId != null) {
-    params.push(query.sampleTypeId)
-    whereParts.push(`sample_type_id = $${params.length}`)
-  }
-  if (query.measurementTypeId != null) {
-    params.push(query.measurementTypeId)
-    whereParts.push(`measurement_type_id = $${params.length}`)
-  }
-  if (query.dateFrom) {
-    params.push(query.dateFrom)
-    whereParts.push(`finding_date >= $${params.length}`)
-  }
-  if (query.dateTo) {
-    params.push(query.dateTo)
-    whereParts.push(`finding_date <= $${params.length}`)
+  for (const filter of query.filters ?? []) {
+    const column = view.columns.find((c) => c.id === filter.column && c.filterable)
+    if (column) whereParts.push(...filterClauses(column, filter, push))
   }
 
   const countResult = await pool.query<{ count: string }>(
-    `select count(*)::text as count from findings where ${whereParts.join(' and ')}`,
-    params,
+    `select count(*)::text as count from findings f where ${whereParts.join(' and ')}`,
+    [...params],
   )
 
-  if (query.cursor) {
-    params.push(query.cursor.value)
-    const valueParamIndex = params.length
-    params.push(query.cursor.id)
-    const idParamIndex = params.length
-    whereParts.push(`(${sortColumn}, id) ${compareOp} ($${valueParamIndex}, $${idParamIndex})`)
+  const expr = sortExpression(sortColumn, push)
+  if (query.cursor && cursorMatches(query.cursor, expr.cast)) {
+    const blank = push(query.cursor.blank)
+    const value = push(query.cursor.value)
+    const id = push(query.cursor.id)
+    const op = dir === 'asc' ? '>' : '<'
+    whereParts.push(
+      `(${expr.blank} > ${blank}::int or (${expr.blank} = ${blank}::int and (${expr.value}, f.id) ${op} (${value}::${expr.cast}, ${id}::bigint)))`,
+    )
   }
+  const limitParam = push(limit)
 
-  params.push(limit)
-  const limitParamIndex = params.length
-
-  const result = await pool.query<Finding>(
-    `select ${FINDING_COLUMNS} from findings
+  const result = await pool.query<Finding & { sort_value: string; sort_blank: number }>(
+    `select ${FINDING_COLUMNS_F}, (${expr.value})::text as sort_value, ${expr.blank} as sort_blank
+     from findings f
      where ${whereParts.join(' and ')}
-     order by ${sortColumn} ${dir}, id ${dir}
-     limit $${limitParamIndex}`,
+     order by ${expr.blank} asc, ${expr.value} ${dir}, f.id ${dir}
+     limit ${limitParam}`,
     params,
   )
 
-  const rows = result.rows
-  const last = rows[rows.length - 1]
-  const nextCursor = rows.length === limit && last ? encodeFindingsCursor(last, sort) : null
+  const last = result.rows[result.rows.length - 1]
+  const nextCursor =
+    result.rows.length === limit && last
+      ? encodeFindingsCursor({ value: last.sort_value, blank: Number(last.sort_blank), id: Number(last.id) })
+      : null
+  const rows = result.rows.map(({ sort_value: _value, sort_blank: _blank, ...row }) => row)
 
   return { rows, nextCursor, totalCount: Number(countResult.rows[0].count) }
 }
