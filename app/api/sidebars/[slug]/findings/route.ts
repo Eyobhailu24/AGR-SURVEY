@@ -1,10 +1,19 @@
 import { NextResponse } from 'next/server'
 import { requireRole } from '@/lib/auth-guard'
 import { getSidebarBySlug } from '@/lib/queries/sidebars'
-import { createFinding, decodeFindingsCursor, listFindings } from '@/lib/queries/findings'
-import { resolveView, sanitizeFilters } from '@/lib/sidebar-view'
+import {
+  createFinding,
+  decodeFindingsCursor,
+  deleteFindings,
+  deleteMatchingFindings,
+  listFindings,
+  type Finding,
+} from '@/lib/queries/findings'
+import { resolveView, sanitizeFilters, type FindingsFilter } from '@/lib/sidebar-view'
 import { recordAudit } from '@/lib/audit'
 import { sanitizeRichText } from '@/lib/sanitize-html'
+
+const MAX_BULK_IDS = 5000
 
 export async function GET(request: Request, { params }: { params: Promise<{ slug: string }> }) {
   const ctx = await requireRole('reader')
@@ -70,4 +79,63 @@ export async function POST(request: Request, { params }: { params: Promise<{ slu
     diff: { after: finding, sidebar: sidebar.slug },
   })
   return NextResponse.json(finding, { status: 201 })
+}
+
+function parseIds(raw: unknown): number[] | null {
+  if (!Array.isArray(raw)) return null
+  const ids = [...new Set(raw.map(Number))]
+  if (ids.length === 0 || ids.length > MAX_BULK_IDS) return null
+  return ids.every((id) => Number.isSafeInteger(id) && id > 0) ? ids : null
+}
+
+// Bulk delete. The body is either { ids } — rows ticked in the table — or
+// { allMatching: true, filters, expectedCount } for "select all N matching",
+// where expectedCount is the number the user confirmed.
+export async function DELETE(request: Request, { params }: { params: Promise<{ slug: string }> }) {
+  const ctx = await requireRole('editor')
+  if (!ctx.ok) return NextResponse.json({ error: 'Forbidden' }, { status: 403 })
+  const { slug } = await params
+  const sidebar = await getSidebarBySlug(slug)
+  if (!sidebar) return NextResponse.json({ error: 'Not found' }, { status: 404 })
+
+  const body = await request.json().catch(() => null)
+  let deleted: Finding[]
+  let filters: FindingsFilter[] = []
+  const mode = body?.allMatching === true ? 'all-matching' : 'selected'
+
+  if (mode === 'all-matching') {
+    const expectedCount = Number(body.expectedCount)
+    if (!Number.isSafeInteger(expectedCount) || expectedCount < 1) {
+      return NextResponse.json({ error: 'expectedCount is required' }, { status: 400 })
+    }
+    filters = sanitizeFilters(body.filters, resolveView(sidebar))
+    const result = await deleteMatchingFindings(sidebar, filters, expectedCount)
+    if (!result.ok) {
+      return NextResponse.json(
+        {
+          error: `Nothing was deleted: ${result.count} findings match now, not the ${expectedCount} you confirmed. The table has been refreshed — check it and try again.`,
+        },
+        { status: 409 },
+      )
+    }
+    deleted = result.rows
+  } else {
+    const ids = parseIds(body?.ids)
+    if (!ids) return NextResponse.json({ error: `ids must be a list of 1–${MAX_BULK_IDS} finding ids` }, { status: 400 })
+    deleted = await deleteFindings(sidebar.id, ids)
+  }
+
+  if (deleted.length > 0) {
+    await recordAudit({
+      actorEmail: ctx.email,
+      actorName: ctx.name,
+      action: 'finding.bulk_delete',
+      entityType: 'sidebar',
+      entityId: sidebar.id,
+      // The deleted rows themselves are kept here, so a mistaken bulk delete
+      // can still be reconstructed from the audit log.
+      diff: { sidebar: sidebar.slug, mode, filters, count: deleted.length, before: deleted },
+    })
+  }
+  return NextResponse.json({ deletedCount: deleted.length })
 }

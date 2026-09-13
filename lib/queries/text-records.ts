@@ -46,6 +46,15 @@ export async function upsertTextRecord(sidebarId: number, date: string, body: st
   return result.rows[0]
 }
 
+/** Deletes the given records — only ones that belong to this sidebar — and returns the deleted rows. */
+export async function deleteTextRecords(sidebarId: number, ids: number[]) {
+  const result = await pool.query<TextRecord>(
+    'delete from text_records where sidebar_id = $1 and id = any($2::int[]) returning id, record_date, body, updated_by',
+    [sidebarId, ids],
+  )
+  return result.rows
+}
+
 export async function deleteTextRecord(sidebarId: number, date: string) {
   const existing = await pool.query<TextRecord>(
     'select id, record_date, body, updated_by from text_records where sidebar_id = $1 and record_date = $2',

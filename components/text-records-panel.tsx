@@ -25,7 +25,8 @@ import {
 import { RichTextEditor } from '@/components/rich-text-editor'
 import { ImportTextDialog } from '@/components/import-text-dialog'
 import { ExportMenu } from '@/components/export-menu'
-import { formatDateDisplay } from '@/lib/utils'
+import { BulkSelectionBar } from '@/components/bulk-selection-bar'
+import { cn, formatDateDisplay } from '@/lib/utils'
 import type { TextRecord } from '@/lib/queries/text-records'
 
 function todayISO() {
@@ -48,6 +49,10 @@ export function TextRecordsPanel({ apiBase, slug, canEdit }: { apiBase: string; 
   const [deleteTarget, setDeleteTarget] = useState<TextRecord | null>(null)
   const [deleting, setDeleting] = useState(false)
 
+  const [selectedIds, setSelectedIds] = useState<Set<number>>(() => new Set())
+  const [bulkDeleteOpen, setBulkDeleteOpen] = useState(false)
+  const [bulkDeleting, setBulkDeleting] = useState(false)
+
   async function load() {
     setLoading(true)
     try {
@@ -65,6 +70,8 @@ export function TextRecordsPanel({ apiBase, slug, canEdit }: { apiBase: string; 
   }
 
   useEffect(() => {
+    // A different set of cards is about to show — don't carry ticks over to it.
+    setSelectedIds(new Set())
     load()
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [apiBase, dir, dateFromFilter, dateToFilter])
@@ -121,11 +128,50 @@ export function TextRecordsPanel({ apiBase, slug, canEdit }: { apiBase: string; 
       if (!response.ok) throw new Error('Delete failed')
       toast.success('Text record deleted')
       setRecords((all) => all.filter((r) => r.record_date !== deleteTarget.record_date))
+      setSelectedIds((prev) => {
+        const next = new Set(prev)
+        next.delete(deleteTarget.id)
+        return next
+      })
     } catch {
       toast.error('Could not delete this text record')
     } finally {
       setDeleting(false)
       setDeleteTarget(null)
+    }
+  }
+
+  function toggleSelected(id: number, checked: boolean) {
+    setSelectedIds((prev) => {
+      const next = new Set(prev)
+      if (checked) next.add(id)
+      else next.delete(id)
+      return next
+    })
+  }
+  const allSelected = records.length > 0 && records.every((r) => selectedIds.has(r.id))
+  const someSelected = records.some((r) => selectedIds.has(r.id))
+
+  async function confirmBulkDelete() {
+    const ids = [...selectedIds]
+    setBulkDeleting(true)
+    try {
+      const response = await fetch(`${apiBase}/text-records`, {
+        method: 'DELETE',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ ids }),
+      })
+      const body = await response.json().catch(() => ({}))
+      if (!response.ok) throw new Error(body.error || 'Could not delete the selected text records')
+      toast.success(`${body.deletedCount} text record${body.deletedCount === 1 ? '' : 's'} deleted`)
+      const deletedIds = new Set(ids)
+      setRecords((all) => all.filter((r) => !deletedIds.has(r.id)))
+      setSelectedIds(new Set())
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : 'Could not delete the selected text records')
+    } finally {
+      setBulkDeleting(false)
+      setBulkDeleteOpen(false)
     }
   }
 
@@ -202,7 +248,30 @@ export function TextRecordsPanel({ apiBase, slug, canEdit }: { apiBase: string; 
             </Button>
           )}
         </div>
+        {canEdit && records.length > 0 && (
+          <label className="flex items-center gap-2 text-xs uppercase tracking-wide text-muted-foreground">
+            <input
+              type="checkbox"
+              className="size-4 accent-primary"
+              checked={allSelected}
+              ref={(el) => {
+                if (el) el.indeterminate = someSelected && !allSelected
+              }}
+              onChange={(e) => setSelectedIds(e.target.checked ? new Set(records.map((r) => r.id)) : new Set())}
+            />
+            Select all
+          </label>
+        )}
       </div>
+
+      {canEdit && selectedIds.size > 0 && (
+        <BulkSelectionBar
+          count={selectedIds.size}
+          noun={['text record', 'text records']}
+          onClear={() => setSelectedIds(new Set())}
+          onDelete={() => setBulkDeleteOpen(true)}
+        />
+      )}
 
       {loading ? (
         <p className="text-sm text-muted-foreground">Loading…</p>
@@ -212,29 +281,49 @@ export function TextRecordsPanel({ apiBase, slug, canEdit }: { apiBase: string; 
         </p>
       ) : (
         <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-3">
-          {records.map((record) => (
-            <div key={record.record_date} className="flex flex-col gap-2 rounded-xl border border-border bg-card p-4">
-              <div className="flex items-start justify-between gap-2">
-                <p className="font-mono text-xs uppercase tracking-wide text-muted-foreground">
-                  {formatDateDisplay(record.record_date)}
-                </p>
-                {canEdit && (
-                  <div className="flex shrink-0 gap-1">
-                    <Button size="icon-xs" variant="ghost" aria-label="Edit" onClick={() => openEdit(record)}>
-                      <Pencil />
-                    </Button>
-                    <Button size="icon-xs" variant="ghost" aria-label="Delete" onClick={() => setDeleteTarget(record)}>
-                      <Trash2 />
-                    </Button>
-                  </div>
-                )}
-              </div>
+          {records.map((record) => {
+            const selected = selectedIds.has(record.id)
+            return (
               <div
-                className="prose prose-sm dark:prose-invert max-h-48 max-w-none overflow-hidden text-sm *:first:mt-0 *:last:mb-0"
-                dangerouslySetInnerHTML={{ __html: record.body || '<p class="text-muted-foreground">Empty</p>' }}
-              />
-            </div>
-          ))}
+                key={record.record_date}
+                className={cn(
+                  'flex flex-col gap-2 rounded-xl border border-border bg-card p-4',
+                  selected && 'border-primary/50 ring-2 ring-primary/30',
+                )}
+              >
+                <div className="flex items-start justify-between gap-2">
+                  <div className="flex items-center gap-2">
+                    {canEdit && (
+                      <input
+                        type="checkbox"
+                        className="size-4 accent-primary"
+                        aria-label={`Select the record for ${formatDateDisplay(record.record_date)}`}
+                        checked={selected}
+                        onChange={(e) => toggleSelected(record.id, e.target.checked)}
+                      />
+                    )}
+                    <p className="font-mono text-xs uppercase tracking-wide text-muted-foreground">
+                      {formatDateDisplay(record.record_date)}
+                    </p>
+                  </div>
+                  {canEdit && (
+                    <div className="flex shrink-0 gap-1">
+                      <Button size="icon-xs" variant="ghost" aria-label="Edit" onClick={() => openEdit(record)}>
+                        <Pencil />
+                      </Button>
+                      <Button size="icon-xs" variant="ghost" aria-label="Delete" onClick={() => setDeleteTarget(record)}>
+                        <Trash2 />
+                      </Button>
+                    </div>
+                  )}
+                </div>
+                <div
+                  className="prose prose-sm dark:prose-invert max-h-48 max-w-none overflow-hidden text-sm *:first:mt-0 *:last:mb-0"
+                  dangerouslySetInnerHTML={{ __html: record.body || '<p class="text-muted-foreground">Empty</p>' }}
+                />
+              </div>
+            )
+          })}
         </div>
       )}
 
@@ -288,6 +377,25 @@ export function TextRecordsPanel({ apiBase, slug, canEdit }: { apiBase: string; 
             <AlertDialogCancel>Cancel</AlertDialogCancel>
             <AlertDialogAction onClick={confirmDelete} disabled={deleting}>
               Delete
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
+
+      <AlertDialog open={bulkDeleteOpen} onOpenChange={(open) => !bulkDeleting && setBulkDeleteOpen(open)}>
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>
+              Delete {selectedIds.size} text record{selectedIds.size === 1 ? '' : 's'}?
+            </AlertDialogTitle>
+            <AlertDialogDescription>
+              The selected records will be permanently removed. This can&apos;t be undone.
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel>Cancel</AlertDialogCancel>
+            <AlertDialogAction variant="destructive" onClick={confirmBulkDelete} disabled={bulkDeleting}>
+              {bulkDeleting ? 'Deleting…' : `Delete ${selectedIds.size}`}
             </AlertDialogAction>
           </AlertDialogFooter>
         </AlertDialogContent>

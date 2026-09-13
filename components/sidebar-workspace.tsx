@@ -21,6 +21,7 @@ import { TextRecordsPanel } from '@/components/text-records-panel'
 import { AddLookupDialog } from '@/components/add-lookup-dialog'
 import { ImportCsvDialog } from '@/components/import-csv-dialog'
 import { ImportImageDialog } from '@/components/import-image-dialog'
+import { BulkSelectionBar } from '@/components/bulk-selection-bar'
 import { cn } from '@/lib/utils'
 import type { Sidebar } from '@/lib/queries/sidebars'
 import type { Finding, FindingsPage } from '@/lib/queries/findings'
@@ -241,13 +242,26 @@ export function SidebarWorkspace({
   const [loading, setLoading] = useState(false)
   const skipInitialFetch = useRef(true)
 
+  // Ticked rows stay ticked while paging. `allMatching` is "select all N
+  // matching" — every row under the current filters, on every page — and is
+  // deleted server-side by those filters rather than by id.
+  const [selectedIds, setSelectedIds] = useState<Set<Finding['id']>>(() => new Set())
+  const [allMatching, setAllMatching] = useState(false)
+  const [bulkDeleteOpen, setBulkDeleteOpen] = useState(false)
+  const [bulkDeleting, setBulkDeleting] = useState(false)
+
   const apiBase = `/api/sidebars/${sidebar.slug}`
   const sortableColumns = view.columns.filter((c) => c.sortable)
   const filterableColumns = view.columns.filter((c) => c.filterable)
   const sortColumn = view.columns.find((c) => c.id === sort.column) ?? view.columns[0]
   const hasFilterInput = Object.values(filterInputs).some((f) => f.value || f.from || f.to)
 
-  async function fetchPage(cursor: string | undefined, targetPageIndex: number) {
+  const pageIds = findings.map((f) => f.id)
+  const pageAllSelected = pageIds.length > 0 && pageIds.every((id) => selectedIds.has(id))
+  const pageSomeSelected = pageIds.some((id) => selectedIds.has(id))
+  const selectedCount = allMatching ? totalCount : selectedIds.size
+
+  async function fetchPage(cursor: string | undefined, targetPageIndex: number): Promise<FindingsPage | null> {
     setLoading(true)
     try {
       const params = new URLSearchParams({ limit: String(pageSize), sort: sort.column, dir: sort.dir })
@@ -260,8 +274,10 @@ export function SidebarWorkspace({
       setTotalCount(page.totalCount)
       setNextCursor(page.nextCursor)
       setPageIndex(targetPageIndex)
+      return page
     } catch {
       toast.error('Could not load findings')
+      return null
     } finally {
       setLoading(false)
     }
@@ -277,7 +293,8 @@ export function SidebarWorkspace({
     return () => clearTimeout(timer)
   }, [filterInputs])
 
-  // Sort or filter changed: always restart at page 1. Skipped on mount — the
+  // Sort or filter changed: always restart at page 1, with nothing selected
+  // (the rows on screen are a different set now). Skipped on mount — the
   // server already rendered page 1 for the default sort with no filters.
   const filtersKey = JSON.stringify(filters)
   useEffect(() => {
@@ -285,6 +302,7 @@ export function SidebarWorkspace({
       skipInitialFetch.current = false
       return
     }
+    clearSelection()
     setCursors([undefined])
     fetchPage(undefined, 0)
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -301,6 +319,31 @@ export function SidebarWorkspace({
     setFilterInputs((all) => ({ ...all, [columnId]: { ...all[columnId], ...patch } }))
   }
 
+  function clearSelection() {
+    setSelectedIds(new Set())
+    setAllMatching(false)
+  }
+  function toggleSelected(id: Finding['id'], checked: boolean) {
+    setAllMatching(false)
+    setSelectedIds((prev) => {
+      const next = new Set(prev)
+      if (checked) next.add(id)
+      else next.delete(id)
+      return next
+    })
+  }
+  function togglePage(checked: boolean) {
+    setAllMatching(false)
+    setSelectedIds((prev) => {
+      const next = new Set(prev)
+      for (const id of pageIds) {
+        if (checked) next.add(id)
+        else next.delete(id)
+      }
+      return next
+    })
+  }
+
   function goNext() {
     if (!nextCursor) return
     setCursors((all) => [...all.slice(0, pageIndex + 1), nextCursor])
@@ -310,8 +353,10 @@ export function SidebarWorkspace({
     if (pageIndex === 0) return
     fetchPage(cursors[pageIndex - 1], pageIndex - 1)
   }
-  function refetchCurrentPage() {
-    fetchPage(cursors[pageIndex], pageIndex)
+  async function refetchCurrentPage() {
+    const page = await fetchPage(cursors[pageIndex], pageIndex)
+    // Everything on a later page was deleted — step back to the start.
+    if (page && page.rows.length === 0 && pageIndex > 0) refetchFirstPage()
   }
   function refetchFirstPage() {
     // New or imported rows could land anywhere in the sort order — safest to
@@ -350,11 +395,50 @@ export function SidebarWorkspace({
       const response = await fetch(`${apiBase}/findings/${deleteTarget.id}`, { method: 'DELETE' })
       if (!response.ok) throw new Error('Delete failed')
       toast.success('Finding deleted')
+      setAllMatching(false)
+      setSelectedIds((prev) => {
+        const next = new Set(prev)
+        next.delete(deleteTarget.id)
+        return next
+      })
       refetchCurrentPage()
     } catch {
       toast.error('Could not delete this finding')
     } finally {
       setDeleteTarget(null)
+    }
+  }
+
+  async function confirmBulkDelete() {
+    const wasAllMatching = allMatching
+    setBulkDeleting(true)
+    try {
+      const response = await fetch(`${apiBase}/findings`, {
+        method: 'DELETE',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify(
+          wasAllMatching
+            ? { allMatching: true, filters, expectedCount: totalCount }
+            : // pg returns bigint ids as strings — send numbers.
+              { ids: [...selectedIds].map(Number) },
+        ),
+      })
+      const body = await response.json().catch(() => ({}))
+      if (!response.ok) throw new Error(body.error || 'Could not delete the selected findings')
+      toast.success(`${body.deletedCount} finding${body.deletedCount === 1 ? '' : 's'} deleted`)
+      clearSelection()
+      if (wasAllMatching) refetchFirstPage()
+      else refetchCurrentPage()
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : 'Could not delete the selected findings')
+      // Typically "the matching set changed" — show the current data before they retry.
+      if (wasAllMatching) {
+        clearSelection()
+        refetchFirstPage()
+      }
+    } finally {
+      setBulkDeleting(false)
+      setBulkDeleteOpen(false)
     }
   }
 
@@ -572,10 +656,46 @@ export function SidebarWorkspace({
         )}
       </div>
 
+      {canEdit && selectedCount > 0 && (
+        <BulkSelectionBar
+          count={selectedCount}
+          noun={['finding', 'findings']}
+          onClear={clearSelection}
+          onDelete={() => setBulkDeleteOpen(true)}
+        >
+          {!allMatching && pageAllSelected && totalCount > selectedIds.size && (
+            <Button variant="link" size="sm" className="h-auto px-0" onClick={() => setAllMatching(true)}>
+              Select all {totalCount} {filters.length > 0 ? 'findings matching the filters' : 'findings in this sidebar'}
+            </Button>
+          )}
+          {allMatching && (
+            <span className="text-muted-foreground">
+              — {filters.length > 0 ? 'every finding matching the filters' : 'every finding in this sidebar'}, on all
+              pages
+            </span>
+          )}
+        </BulkSelectionBar>
+      )}
+
       <div className="overflow-x-auto rounded-xl border border-border">
         <table className="w-full text-sm">
           <thead className="bg-muted/60 text-left text-xs uppercase tracking-wider text-muted-foreground">
             <tr>
+              {canEdit && (
+                <th className="w-10 p-3">
+                  <input
+                    type="checkbox"
+                    aria-label="Select all findings on this page"
+                    className="size-4 align-middle accent-primary"
+                    disabled={findings.length === 0}
+                    checked={allMatching || pageAllSelected}
+                    ref={(el) => {
+                      if (el) el.indeterminate = !allMatching && pageSomeSelected && !pageAllSelected
+                    }}
+                    onChange={(e) => togglePage(e.target.checked)}
+                  />
+                </th>
+              )}
               {view.columns.map((column) => {
                 const active = sort.column === column.id
                 return (
@@ -605,36 +725,50 @@ export function SidebarWorkspace({
             </tr>
           </thead>
           <tbody>
-            {findings.map((finding) => (
-              <tr key={finding.id} className="border-t border-border align-top">
-                {view.columns.map((column) => (
-                  <td key={column.id} className={cn('p-1', columnMinWidth(column))}>
-                    {renderCell(column, finding)}
-                  </td>
-                ))}
-                {canEdit && (
-                  <td className="p-2">
-                    <div className="flex gap-1">
-                      <Button size="sm" onClick={() => save(finding)} disabled={savingId === finding.id}>
-                        <Save data-icon="inline-start" />
-                        {savingId === finding.id ? 'Saving' : 'Save'}
-                      </Button>
-                      <Button
-                        size="sm"
-                        variant="ghost"
-                        aria-label="Delete finding"
-                        onClick={() => setDeleteTarget(finding)}
-                      >
-                        <Trash2 />
-                      </Button>
-                    </div>
-                  </td>
-                )}
-              </tr>
-            ))}
+            {findings.map((finding) => {
+              const selected = allMatching || selectedIds.has(finding.id)
+              return (
+                <tr key={finding.id} className={cn('border-t border-border align-top', selected && 'bg-primary/5')}>
+                  {canEdit && (
+                    <td className="p-3">
+                      <input
+                        type="checkbox"
+                        aria-label={`Select finding from ${dateOnly(finding.finding_date)}${finding.sample_id ? `, sample ${finding.sample_id}` : ''}`}
+                        className="size-4 align-middle accent-primary"
+                        checked={selected}
+                        onChange={(e) => toggleSelected(finding.id, e.target.checked)}
+                      />
+                    </td>
+                  )}
+                  {view.columns.map((column) => (
+                    <td key={column.id} className={cn('p-1', columnMinWidth(column))}>
+                      {renderCell(column, finding)}
+                    </td>
+                  ))}
+                  {canEdit && (
+                    <td className="p-2">
+                      <div className="flex gap-1">
+                        <Button size="sm" onClick={() => save(finding)} disabled={savingId === finding.id}>
+                          <Save data-icon="inline-start" />
+                          {savingId === finding.id ? 'Saving' : 'Save'}
+                        </Button>
+                        <Button
+                          size="sm"
+                          variant="ghost"
+                          aria-label="Delete finding"
+                          onClick={() => setDeleteTarget(finding)}
+                        >
+                          <Trash2 />
+                        </Button>
+                      </div>
+                    </td>
+                  )}
+                </tr>
+              )
+            })}
             {findings.length === 0 && (
               <tr>
-                <td colSpan={view.columns.length + (canEdit ? 1 : 0)} className="p-6 text-center text-muted-foreground">
+                <td colSpan={view.columns.length + (canEdit ? 2 : 0)} className="p-6 text-center text-muted-foreground">
                   {loading ? 'Loading…' : 'No findings match this view.'}
                 </td>
               </tr>
@@ -674,6 +808,30 @@ export function SidebarWorkspace({
           <AlertDialogFooter>
             <AlertDialogCancel>Cancel</AlertDialogCancel>
             <AlertDialogAction onClick={confirmDelete}>Delete</AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
+
+      <AlertDialog open={bulkDeleteOpen} onOpenChange={(open) => !bulkDeleting && setBulkDeleteOpen(open)}>
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>
+              Delete {selectedCount} finding{selectedCount === 1 ? '' : 's'}?
+            </AlertDialogTitle>
+            <AlertDialogDescription>
+              {allMatching
+                ? filters.length > 0
+                  ? 'Every finding that matches the current filters — on all pages, not just this one — will be permanently removed.'
+                  : `Every finding in ${sidebar.name} — on all pages, not just this one — will be permanently removed.`
+                : 'The selected rows will be permanently removed.'}{' '}
+              This can&apos;t be undone.
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel>Cancel</AlertDialogCancel>
+            <AlertDialogAction variant="destructive" onClick={confirmBulkDelete} disabled={bulkDeleting}>
+              {bulkDeleting ? 'Deleting…' : `Delete ${selectedCount}`}
+            </AlertDialogAction>
           </AlertDialogFooter>
         </AlertDialogContent>
       </AlertDialog>

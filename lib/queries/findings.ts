@@ -159,6 +159,68 @@ function cursorMatches(cursor: FindingsCursor, cast: 'date' | 'numeric' | 'text'
   return true
 }
 
+/** The WHERE clause for one sidebar's findings under the table's filters — shared by listing and "delete all matching". */
+function filteredWhere(sidebarId: number, view: ReturnType<typeof resolveView>, filters: FindingsFilter[] = []) {
+  const params: unknown[] = [sidebarId]
+  const push: Push = (value) => {
+    params.push(value)
+    return `$${params.length}`
+  }
+  const whereParts = ['f.sidebar_id = $1']
+  for (const filter of filters) {
+    const column = view.columns.find((c) => c.id === filter.column && c.filterable)
+    if (column) whereParts.push(...filterClauses(column, filter, push))
+  }
+  return { params, push, whereParts }
+}
+
+/** Deletes the given findings — only ones that belong to this sidebar — and returns the deleted rows. */
+export async function deleteFindings(sidebarId: number, ids: number[]) {
+  const result = await pool.query<Finding>(
+    `delete from findings where sidebar_id = $1 and id = any($2::bigint[]) returning ${FINDING_COLUMNS}`,
+    [sidebarId, ids],
+  )
+  return result.rows
+}
+
+/**
+ * Deletes every finding matching the filters (every finding in the sidebar
+ * when there are none) — but only if that is still exactly the
+ * `expectedCount` rows the user confirmed. The matching rows are locked
+ * first and deleted by id, so a row added or removed in the meantime turns
+ * into a conflict instead of being deleted unseen.
+ */
+export async function deleteMatchingFindings(
+  sidebar: FindingsQuery['sidebar'],
+  filters: FindingsFilter[],
+  expectedCount: number,
+): Promise<{ ok: true; rows: Finding[] } | { ok: false; count: number }> {
+  const { params, whereParts } = filteredWhere(sidebar.id, resolveView(sidebar), filters)
+  const client = await pool.connect()
+  try {
+    await client.query('begin')
+    const matching = await client.query<{ id: string }>(
+      `select f.id from findings f where ${whereParts.join(' and ')} for update`,
+      params,
+    )
+    if (matching.rows.length !== expectedCount) {
+      await client.query('rollback')
+      return { ok: false, count: matching.rows.length }
+    }
+    const result = await client.query<Finding>(
+      `delete from findings where sidebar_id = $1 and id = any($2::bigint[]) returning ${FINDING_COLUMNS}`,
+      [sidebar.id, matching.rows.map((r) => r.id)],
+    )
+    await client.query('commit')
+    return { ok: true, rows: result.rows }
+  } catch (error) {
+    await client.query('rollback')
+    throw error
+  } finally {
+    client.release()
+  }
+}
+
 // Keyset (not offset) pagination on purpose — doesn't skip/duplicate rows
 // under concurrent inserts the way OFFSET does, and the default date sort
 // stays index-backed. Sort and filter columns come only from the sidebar's
@@ -171,17 +233,7 @@ export async function listFindings(query: FindingsQuery): Promise<FindingsPage> 
   const sortColumn = requested ?? view.columns.find((c) => c.id === view.defaultSort.column)!
   const dir: SortDir = requested && query.dir ? query.dir : view.defaultSort.dir
 
-  const params: unknown[] = [query.sidebar.id]
-  const push: Push = (value) => {
-    params.push(value)
-    return `$${params.length}`
-  }
-  const whereParts = ['f.sidebar_id = $1']
-
-  for (const filter of query.filters ?? []) {
-    const column = view.columns.find((c) => c.id === filter.column && c.filterable)
-    if (column) whereParts.push(...filterClauses(column, filter, push))
-  }
+  const { params, push, whereParts } = filteredWhere(query.sidebar.id, view, query.filters)
 
   const countResult = await pool.query<{ count: string }>(
     `select count(*)::text as count from findings f where ${whereParts.join(' and ')}`,

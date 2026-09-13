@@ -21,6 +21,8 @@ const ACTION_LABELS: Record<string, string> = {
   'finding.create': 'Added a finding',
   'finding.update': 'Edited a finding',
   'finding.delete': 'Deleted a finding',
+  'finding.bulk_delete': 'Deleted findings in bulk',
+  'text_record.bulk_delete': 'Deleted text records in bulk',
   'import.csv': 'Imported a CSV',
   'text_record.upsert': 'Saved a text record',
   'text_record.delete': 'Deleted a text record',
@@ -159,6 +161,18 @@ export function describeAuditEntry(
         entity: sidebarName ?? 'Finding',
         details: changes.length > 0 ? `Sample ${sample} — ${changes.join('; ')}` : `Sample ${sample} — no field changes`,
       }
+    }
+    case 'finding.bulk_delete':
+    case 'text_record.bulk_delete': {
+      const count = Number(diff.count ?? 0)
+      const noun = entry.action === 'finding.bulk_delete' ? 'finding' : 'text record'
+      const scope =
+        diff.mode === 'all-matching'
+          ? Array.isArray(diff.filters) && diff.filters.length > 0
+            ? ' · all matching the filters'
+            : ' · every one in the sidebar'
+          : ''
+      return { action, entity: sidebarName ?? 'Sidebar', details: `${count} ${noun}${count === 1 ? '' : 's'} deleted${scope}` }
     }
     case 'import.csv': {
       const inserted = Number(diff.insertedCount ?? 0)
