@@ -1,6 +1,6 @@
 'use client'
 
-import { useState } from 'react'
+import { useEffect, useState } from 'react'
 import { toast } from 'sonner'
 import { ImageUp } from 'lucide-react'
 import { Button, buttonVariants } from '@/components/ui/button'
@@ -15,6 +15,7 @@ import {
 } from '@/components/ui/dialog'
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table'
 import type { Sidebar } from '@/lib/queries/sidebars'
+import type { FindingRowInput } from '@/lib/import/build-schema'
 
 type PreviewResult = { index: number; ok: boolean; errors?: string[] }
 type PreviewResponse = { validCount: number; invalidCount: number; results: PreviewResult[] }
@@ -40,9 +41,13 @@ export function ImportImageDialog({
   const [open, setOpen] = useState(false)
   const [file, setFile] = useState<File | null>(null)
   const [previewUrl, setPreviewUrl] = useState<string | null>(null)
-  const [extractedRows, setExtractedRows] = useState<unknown[] | null>(null)
+  const [extractedRows, setExtractedRows] = useState<FindingRowInput[] | null>(null)
   const [preview, setPreview] = useState<PreviewResponse | null>(null)
   const [busy, setBusy] = useState(false)
+
+  useEffect(() => () => {
+    if (previewUrl) URL.revokeObjectURL(previewUrl)
+  }, [previewUrl])
 
   function reset() {
     setFile(null)
@@ -52,6 +57,11 @@ export function ImportImageDialog({
   }
 
   function handleFile(f: File) {
+    if (!['image/jpeg', 'image/png', 'image/webp', 'image/gif'].includes(f.type)) {
+      reset()
+      toast.error('Use a JPEG, PNG, WebP, or GIF image')
+      return
+    }
     setFile(f)
     setPreviewUrl(URL.createObjectURL(f))
     setExtractedRows(null)
@@ -61,6 +71,8 @@ export function ImportImageDialog({
   async function runExtract() {
     if (!file) return
     setBusy(true)
+    setExtractedRows(null)
+    setPreview(null)
     try {
       const imageBase64 = await fileToBase64(file)
       const response = await fetch(`${apiBase}/import/image`, {
@@ -117,6 +129,7 @@ export function ImportImageDialog({
     <Dialog
       open={open}
       onOpenChange={(next) => {
+        if (busy) return
         setOpen(next)
         if (!next) reset()
       }}
@@ -137,7 +150,8 @@ export function ImportImageDialog({
         <div className="flex flex-col gap-4">
           <input
             type="file"
-            accept="image/*"
+            accept="image/jpeg,image/png,image/webp,image/gif"
+            disabled={busy}
             aria-label="Notebook photo"
             onChange={(e) => e.target.files?.[0] && handleFile(e.target.files[0])}
             className="text-sm"
@@ -156,22 +170,43 @@ export function ImportImageDialog({
                 <TableHeader>
                   <TableRow>
                     <TableHead>Row</TableHead>
+                    <TableHead>Extracted data</TableHead>
                     <TableHead>Status</TableHead>
                   </TableRow>
                 </TableHeader>
                 <TableBody>
-                  {preview.results.map((r) => (
-                    <TableRow key={r.index}>
-                      <TableCell className="text-xs">{r.index + 1}</TableCell>
-                      <TableCell className="text-xs">
-                        {r.ok ? (
-                          <span className="text-emerald-600 dark:text-emerald-400">Ready</span>
-                        ) : (
-                          <span className="text-destructive">{(r.errors ?? []).join('; ')}</span>
-                        )}
-                      </TableCell>
-                    </TableRow>
-                  ))}
+                  {preview.results.map((r) => {
+                    const row = extractedRows?.[r.index]
+                    const fields = row ? [
+                      ['Date', row.finding_date],
+                      ['Sample', row.sample_id],
+                      ['Sample type', row.sample_type_label],
+                      ['Measurement type', row.measurement_type_label],
+                      ['Group', row.measurement_group],
+                      ...sidebar.column_schema.map((column) => [column.label, row.values[column.key]]),
+                      ['Apparatus', row.apparatus],
+                      ['Notes', row.notes],
+                    ] : []
+                    return (
+                      <TableRow key={r.index}>
+                        <TableCell className="text-xs">{r.index + 1}</TableCell>
+                        <TableCell className="min-w-56 whitespace-normal text-xs">
+                          {fields.filter(([, value]) => value).map(([label, value], index) => (
+                            <div key={index} className="break-words">
+                              <span className="font-medium">{label}:</span> {value}
+                            </div>
+                          ))}
+                        </TableCell>
+                        <TableCell className="text-xs">
+                          {r.ok ? (
+                            <span className="text-emerald-600 dark:text-emerald-400">Ready</span>
+                          ) : (
+                            <span className="text-destructive">{(r.errors ?? []).join('; ')}</span>
+                          )}
+                        </TableCell>
+                      </TableRow>
+                    )
+                  })}
                 </TableBody>
               </Table>
             </div>
@@ -179,12 +214,12 @@ export function ImportImageDialog({
           <p className="text-xs text-muted-foreground">
             {preview
               ? `${preview.validCount} row(s) ready, ${preview.invalidCount} will be skipped.`
-              : "Uses the AI Gateway — extraction may take a few seconds and applies your account's usage."}
+              : 'Reading the photo may take a few seconds. Review the extracted values before importing.'}
           </p>
         </div>
 
         <DialogFooter>
-          <Button variant="outline" onClick={() => setOpen(false)}>
+          <Button variant="outline" disabled={busy} onClick={() => { setOpen(false); reset() }}>
             Cancel
           </Button>
           {!preview ? (

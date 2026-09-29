@@ -1,9 +1,9 @@
 import { NextResponse } from 'next/server'
-import { generateObject } from 'ai'
-import { z } from 'zod'
+import { generateObject, NoObjectGeneratedError } from 'ai'
 import { requireRole } from '@/lib/auth-guard'
-import { VISION_MODEL, isAiConfigured, xkiro } from '@/lib/ai/provider'
+import { MAX_OUTPUT_TOKENS, VISION_MODEL, isAiConfigured, xkiro } from '@/lib/ai/provider'
 import { getSidebarBySlug } from '@/lib/queries/sidebars'
+import { buildImageExtractionRequest } from '@/lib/import/image-extraction'
 
 // Produces candidate rows in the exact same shape lib/import/build-schema.ts
 // expects (sample_type/measurement_type as plain labels, values keyed by the
@@ -18,58 +18,36 @@ export async function POST(request: Request, { params }: { params: Promise<{ slu
   if (!sidebar) return NextResponse.json({ error: 'Not found' }, { status: 404 })
 
   const body = await request.json().catch(() => ({}))
-  const imageBase64: string | undefined = body.imageBase64
-  const mediaType: string = body.mediaType || 'image/jpeg'
-  if (!imageBase64) return NextResponse.json({ error: 'imageBase64 is required' }, { status: 400 })
+  const imageBase64 = body?.imageBase64
+  const mediaType = body?.mediaType || 'image/jpeg'
+  if (typeof imageBase64 !== 'string' || !imageBase64.trim()) {
+    return NextResponse.json({ error: 'A notebook image is required' }, { status: 400 })
+  }
+  if (!['image/jpeg', 'image/png', 'image/webp', 'image/gif'].includes(mediaType)) {
+    return NextResponse.json({ error: 'Use a JPEG, PNG, WebP, or GIF image' }, { status: 400 })
+  }
 
   if (!isAiConfigured()) {
     console.error('[import/image] XKIRO_API_KEY is not set')
     return NextResponse.json({ error: 'Image extraction is not configured. Contact an administrator.' }, { status: 503 })
   }
 
-  const columnDescriptions =
-    sidebar.column_schema.map((c) => `"${c.key}" (${c.label}, ${c.type})`).join(', ') || 'none defined for this sidebar'
-
-  const rowSchema = z.object({
-    finding_date: z
-      .string()
-      .default('')
-      .describe('Date in YYYY-MM-DD format. Use the most recently written date on the page if one row lacks its own.'),
-    sample_id: z.string().default('').describe('Sample or pot number/label, if shown'),
-    sample_type_label: z.string().default('').describe('A short sample type name if mentioned (e.g. soil, leaf) — blank if not stated'),
-    measurement_type_label: z
-      .string()
-      .default('')
-      .describe('A short measurement type name if mentioned (e.g. NO3, K) — blank if not stated'),
-    measurement_group: z.string().default(''),
-    values: z.record(z.string(), z.string()).default({}).describe(`Measurement values keyed by: ${columnDescriptions}`),
-    apparatus: z.string().default(''),
-    notes: z.string().default('').describe('Any handwritten remarks for this row, transcribed verbatim'),
-  })
-
   try {
     const { object } = await generateObject({
       model: xkiro(VISION_MODEL),
-      schema: z.object({ rows: z.array(rowSchema) }),
-      messages: [
-        {
-          role: 'user',
-          content: [
-            {
-              type: 'text',
-              text:
-                'This is a photo of a handwritten research lab notebook page. Extract every distinct data row as a table ' +
-                `with: date, sample id, sample type, measurement type, group, the measurement values (${columnDescriptions}), ` +
-                "apparatus, and notes. Leave a field blank rather than guessing if it isn't legible or present. Transcribe numbers exactly as written.",
-            },
-            { type: 'file', mediaType, data: imageBase64 },
-          ],
-        },
-      ],
+      ...buildImageExtractionRequest(sidebar, imageBase64, mediaType),
+      maxOutputTokens: MAX_OUTPUT_TOKENS,
     })
     return NextResponse.json({ rows: object.rows })
   } catch (error) {
     console.error('[import/image]', error)
+    if (NoObjectGeneratedError.isInstance(error)) {
+      return NextResponse.json({
+        error: error.finishReason === 'length'
+          ? 'The extracted data was too long. Crop the photo to fewer rows and try again.'
+          : 'The AI could not return valid data for this photo. Try again with a clearer image or fewer rows.',
+      }, { status: 502 })
+    }
     const message = error instanceof Error ? error.message : 'Image extraction failed'
     return NextResponse.json({ error: message }, { status: 500 })
   }
